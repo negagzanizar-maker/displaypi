@@ -170,6 +170,7 @@ public sealed class CryptographicIdentityServicesTests
         chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
         chain.ChainPolicy.CustomTrustStore.Add(authority);
         chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+        chain.ChainPolicy.VerificationTime = nowUtc.UtcDateTime;
         Assert.True(chain.Build(leaf), string.Join(", ", chain.ChainStatus.Select(value => value.StatusInformation)));
     }
 
