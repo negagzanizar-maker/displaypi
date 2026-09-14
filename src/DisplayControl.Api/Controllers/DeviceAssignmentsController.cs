@@ -90,7 +90,7 @@ public sealed class DeviceAssignmentsController(
         var existingAssignments = await dbContext.DeviceAssignments.AsNoTracking()
             .Where(value => value.DeviceId == deviceId && value.IsEnabled && value.Priority == request.Priority)
             .ToListAsync(cancellationToken);
-        if (!request.OverrideEqualPriority && existingAssignments.Any(value => AssignmentSchedule.Overlaps(
+        if (existingAssignments.Any(value => AssignmentSchedule.Overlaps(
                 value.StartsAtUtc,
                 value.EndsAtUtc,
                 request.StartsAtUtc,

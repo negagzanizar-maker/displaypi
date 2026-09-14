@@ -112,7 +112,7 @@ public sealed class GroupAssignmentsController(
                 value.IsEnabled &&
                 value.Priority == request.Priority)
             .ToListAsync(cancellationToken);
-        if (!request.OverrideEqualPriority && existingAssignments.Any(value => AssignmentSchedule.Overlaps(
+        if (existingAssignments.Any(value => AssignmentSchedule.Overlaps(
                 value.StartsAtUtc,
                 value.EndsAtUtc,
                 request.StartsAtUtc,
