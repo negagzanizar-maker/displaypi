@@ -1,5 +1,5 @@
-using System.Security.Claims;
 using System.Diagnostics.CodeAnalysis;
+using System.Security.Claims;
 using DisplayControl.Api.Controllers;
 using DisplayControl.Api.Realtime;
 using DisplayControl.Api.Scheduling;

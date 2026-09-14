@@ -10,8 +10,8 @@ using DisplayControl.Domain.Operations;
 using DisplayControl.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore;
 
 namespace DisplayControl.Api.Controllers;
 

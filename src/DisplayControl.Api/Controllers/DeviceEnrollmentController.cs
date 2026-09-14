@@ -2,7 +2,6 @@ using System.ComponentModel.DataAnnotations;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json;
-
 using DisplayControl.Application.Security;
 using DisplayControl.Domain.Devices;
 using DisplayControl.Domain.Operations;
@@ -11,8 +10,8 @@ using DisplayControl.Infrastructure.Tenancy;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore;
 
 namespace DisplayControl.Api.Controllers;
 

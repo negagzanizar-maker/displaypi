@@ -5,9 +5,9 @@ using DisplayControl.Application.Content;
 using DisplayControl.Application.Security;
 using DisplayControl.Application.Storage;
 using DisplayControl.Infrastructure.Persistence;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.Data.SqlClient;
 
 namespace DisplayControl.Api.Operations;
 

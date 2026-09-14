@@ -7,8 +7,8 @@ using DisplayControl.Application.Security;
 using DisplayControl.Domain.Devices;
 using DisplayControl.Domain.Licensing;
 using DisplayControl.Infrastructure.Persistence;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore;
 
 namespace DisplayControl.Api.Devices;
 
