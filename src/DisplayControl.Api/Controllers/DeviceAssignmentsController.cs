@@ -87,6 +87,20 @@ public sealed class DeviceAssignmentsController(
             return InvalidSchedule(exception.Message);
         }
 
+        var existingAssignments = await dbContext.DeviceAssignments.AsNoTracking()
+            .Where(value => value.DeviceId == deviceId && value.IsEnabled && value.Priority == request.Priority)
+            .ToListAsync(cancellationToken);
+        if (existingAssignments.Any(value => AssignmentSchedule.Overlaps(
+                value.StartsAtUtc,
+                value.EndsAtUtc,
+                request.StartsAtUtc,
+                request.EndsAtUtc)))
+        {
+            return ConflictProblem(
+                "assignment_priority_collision",
+                "The requested schedule overlaps an equal-priority device assignment.");
+        }
+
         var actorId = CurrentUserId();
         var nowUtc = TruncateToMilliseconds(timeProvider.GetUtcNow());
         var assignment = new DeviceAssignment(

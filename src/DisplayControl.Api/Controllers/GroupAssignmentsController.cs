@@ -102,6 +102,27 @@ public sealed class GroupAssignmentsController(
             });
         }
 
+        var memberGroupIds = await dbContext.DeviceGroupMembers.AsNoTracking()
+            .Where(value => memberIds.Contains(value.DeviceId))
+            .Select(value => value.DeviceGroupId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+        var existingAssignments = await dbContext.GroupAssignments.AsNoTracking()
+            .Where(value => memberGroupIds.Contains(value.DeviceGroupId) &&
+                value.IsEnabled &&
+                value.Priority == request.Priority)
+            .ToListAsync(cancellationToken);
+        if (existingAssignments.Any(value => AssignmentSchedule.Overlaps(
+                value.StartsAtUtc,
+                value.EndsAtUtc,
+                request.StartsAtUtc,
+                request.EndsAtUtc)))
+        {
+            return DeviceAssignmentsController.ConflictProblem(
+                "assignment_priority_collision",
+                "The requested schedule overlaps an equal-priority group assignment for one or more devices.");
+        }
+
         var actorId = CurrentUserId();
         var nowUtc = timeProvider.GetUtcNow();
         nowUtc = nowUtc.AddTicks(-(nowUtc.Ticks % TimeSpan.TicksPerMillisecond));
