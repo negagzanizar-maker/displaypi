@@ -1,0 +1,58 @@
+# .NET
+**/bin/
+**/obj/
+*.user
+*.suo
+TestResults/
+coverage/
+artifacts/
+
+# Node / Vite
+node_modules/
+**/dist/
+**/.vite/
+*.tsbuildinfo
+playwright-report/
+test-results/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+appsettings.Local.json
+secrets/
+certificates/private/
+*.pfx
+*.p12
+*.key
+
+# Local service data
+.data/
+
+# IDE / OS
+.vs/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Generated report output (sources stay tracked)
+docs/04-report/output/
+
+# Private progress/report/demo material excluded from the mentor repository
+demo/
+DEPLOYMENT_CHECKLIST.md
+HARDWARE_TEST.md
+docs/00-project/ETAT_AVANCEMENT.md
+docs/00-project/OPEN_DECISIONS.md
+docs/00-project/ROADMAP.md
+docs/00-project/*HANDBOOK*
+docs/00-project/RAPPORT_*
+docs/03-testing/evidence/
+docs/05-operations/FIELD_TEST_TOMORROW.md
+docs/04-report/
+docs/demo/
+docs/internship-deliverables/
+docs/01-requirements/TRACEABILITY.csv
+docs/01-requirements/TRACEABILITY.md
+scripts/__pycache__/

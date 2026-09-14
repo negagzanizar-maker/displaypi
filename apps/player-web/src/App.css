@@ -1,0 +1,129 @@
+.player-screen {
+  width: 100vw;
+  height: 100svh;
+  overflow: hidden;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 20px;
+  padding: 48px;
+  color: #f5f7fa;
+  background:
+    radial-gradient(circle at 50% 40%, rgb(54 72 91 / 34%), transparent 32%),
+    #080d13;
+  cursor: none;
+  user-select: none;
+}
+
+.playback-screen {
+  width: 100vw;
+  height: 100svh;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: #000;
+  color: #fff;
+  cursor: none;
+}
+
+.visual-content {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.composite-content {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  background: #000;
+}
+
+.composite-content .visual-content {
+  min-height: 0;
+}
+
+.caption-content {
+  max-height: 24svh;
+  overflow: hidden;
+  margin: 0;
+  padding: clamp(18px, 3vw, 42px) clamp(24px, 5vw, 80px);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #fff;
+  background: #101820;
+  font: 600 clamp(1.25rem, 3vw, 3.5rem) / 1.25 system-ui, sans-serif;
+  text-align: center;
+}
+
+.text-content {
+  max-width: min(90vw, 1600px);
+  max-height: 90svh;
+  overflow: hidden;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: inherit;
+  font: 500 clamp(2rem, 5vw, 6rem) / 1.2 system-ui, sans-serif;
+  text-align: center;
+}
+
+.player-screen h1,
+.player-screen p {
+  margin: 0;
+}
+
+.player-screen h1 {
+  font-size: clamp(3rem, 7vw, 7rem);
+  font-weight: 650;
+  letter-spacing: -0.055em;
+  text-align: center;
+}
+
+.player-screen p {
+  color: #aebdca;
+  font-size: clamp(1rem, 2vw, 1.7rem);
+}
+
+.state-mark {
+  width: clamp(74px, 8vw, 120px);
+  aspect-ratio: 1;
+  display: grid;
+  place-content: center;
+  border: 2px solid #465767;
+  border-radius: 50%;
+  color: #95a7b7;
+  font-size: clamp(3rem, 5vw, 5rem);
+  font-weight: 200;
+}
+
+.denied .state-mark {
+  color: #ff8f8f;
+  border-color: #a94949;
+  background: rgb(141 44 44 / 12%);
+}
+
+.sync-ring {
+  width: clamp(64px, 7vw, 100px);
+  aspect-ratio: 1;
+  border: 5px solid #27394a;
+  border-top-color: #62e0bf;
+  border-radius: 50%;
+  animation: spin 1.1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sync-ring {
+    animation: none;
+    border-color: #62e0bf;
+  }
+}

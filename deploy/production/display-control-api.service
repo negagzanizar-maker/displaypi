@@ -1,0 +1,39 @@
+[Unit]
+Description=Display Control API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=display-control-api
+Group=display-control-api
+WorkingDirectory=/opt/display-control/api
+ExecStart=/opt/display-control/api/DisplayControl.Api
+Environment=ASPNETCORE_ENVIRONMENT=Production
+EnvironmentFile=/etc/display-control/api.env
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=90s
+TimeoutStopSec=45s
+KillSignal=SIGINT
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+ReadWritePaths=/var/lib/display-control/content /var/lib/display-control/data-protection
+
+[Install]
+WantedBy=multi-user.target

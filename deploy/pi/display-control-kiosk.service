@@ -1,0 +1,41 @@
+[Unit]
+Description=Display Control Chromium kiosk
+After=display-control-agent.service graphical.target
+Requires=display-control-agent.service
+Wants=graphical.target
+
+[Service]
+Type=simple
+User=@KIOSK_USER@
+Group=@KIOSK_GROUP@
+SupplementaryGroups=video render
+Environment=DISPLAY=:0
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_RUNTIME_DIR=/run/user/@KIOSK_UID@
+Environment=XAUTHORITY=@KIOSK_HOME@/.Xauthority
+Environment=HOME=/var/lib/display-control-kiosk
+ExecStart=/usr/local/lib/display-control/launch-kiosk.sh
+Restart=always
+RestartSec=5s
+StartLimitIntervalSec=120
+StartLimitBurst=10
+UMask=0077
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RemoveIPC=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/display-control-kiosk
+
+[Install]
+WantedBy=graphical.target

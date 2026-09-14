@@ -1,0 +1,30 @@
+{
+  "name": "display-control-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Secure multi-tenant Raspberry Pi content and licence control platform",
+  "workspaces": [
+    "apps/admin-web",
+    "apps/player-web"
+  ],
+  "engines": {
+    "node": ">=24.0.0 <26",
+    "npm": ">=11.0.0 <12"
+  },
+  "packageManager": "npm@11.9.0",
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev:admin": "npm run dev --workspace admin-web",
+    "dev:player": "npm run dev --workspace player-web",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:e2e": "playwright test",
+    "test:e2e:list": "playwright test --list",
+    "test:watch": "npm run test:watch --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/test": "1.61.1"
+  }
+}
