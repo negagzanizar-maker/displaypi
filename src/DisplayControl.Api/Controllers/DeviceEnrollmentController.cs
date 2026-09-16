@@ -2,7 +2,6 @@ using System.ComponentModel.DataAnnotations;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json;
-
 using DisplayControl.Application.Security;
 using DisplayControl.Domain.Devices;
 using DisplayControl.Domain.Operations;
@@ -11,8 +10,8 @@ using DisplayControl.Infrastructure.Tenancy;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
 
 namespace DisplayControl.Api.Controllers;
 
@@ -197,7 +196,7 @@ public sealed class DeviceEnrollmentController(
             await transaction.CommitAsync(cancellationToken);
         }
         catch (DbUpdateException exception) when (
-            exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+            exception.InnerException is SqlException { Number: 2601 or 2627 })
         {
             return Conflict(new ProblemDetails
             {

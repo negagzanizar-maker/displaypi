@@ -11,6 +11,7 @@ public sealed class PlayerStateStore(TimeProvider timeProvider)
         null,
         null,
         null,
+        null,
         DateTimeOffset.MinValue);
     private ActivePlayerManifest? _manifest;
     private Dictionary<Guid, PlayerAssetFile> _assetFiles =
@@ -43,7 +44,12 @@ public sealed class PlayerStateStore(TimeProvider timeProvider)
                 !_assetFiles.ContainsKey(report.ContentVersionId) ||
                 !(report.Status == "playing" && report.ErrorCode is null ||
                   report.Status == "error" && report.ErrorCode is "media_error" or "media_stalled")) return false;
-            _state = _state with { SafeReasonCode = report.ErrorCode, UpdatedAtUtc = timeProvider.GetUtcNow() };
+            _state = _state with
+            {
+                SafeReasonCode = report.ErrorCode,
+                CurrentContentVersionId = report.ContentVersionId,
+                UpdatedAtUtc = timeProvider.GetUtcNow()
+            };
             return true;
         }
     }
@@ -73,6 +79,9 @@ public sealed class PlayerStateStore(TimeProvider timeProvider)
                         value.MediaKind,
                         value.DurationMilliseconds,
                         value.LoopVideo,
+                        value.CaptionContentVersionId,
+                        value.IsCaption,
+                        value.CaptionText,
                         $"/player/v1/assets/{value.ContentVersionId:D}")).ToArray());
         }
     }
@@ -220,6 +229,7 @@ public sealed class PlayerStateStore(TimeProvider timeProvider)
             version,
             _authorizationExpiresAtUtc,
             AuthorizationRemainingMilliseconds(),
+            null,
             timeProvider.GetUtcNow());
 }
 
@@ -233,6 +243,7 @@ public sealed record PlayerStateSnapshot(
     long? DesiredStateVersion,
     DateTimeOffset? AuthorizationExpiresAtUtc,
     long? AuthorizationRemainingMilliseconds,
+    Guid? CurrentContentVersionId,
     DateTimeOffset UpdatedAtUtc);
 
 public sealed record ActivePlayerManifest(
@@ -245,7 +256,10 @@ public sealed record ActivePlayerAsset(
     int Position,
     string MediaKind,
     int? DurationMilliseconds,
-    bool LoopVideo);
+    bool LoopVideo,
+    Guid? CaptionContentVersionId = null,
+    bool IsCaption = false,
+    string? CaptionText = null);
 
 public sealed record PlayerAssetFile(string Path, string ContentType, long ByteLength, string Sha256);
 
@@ -260,4 +274,7 @@ public sealed record PlayerManifestAssetSnapshot(
     string MediaKind,
     int? DurationMilliseconds,
     bool LoopVideo,
+    Guid? CaptionContentVersionId,
+    bool IsCaption,
+    string? CaptionText,
     string Url);

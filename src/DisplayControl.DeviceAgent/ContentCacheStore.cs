@@ -172,7 +172,10 @@ public sealed class ContentCacheStore : IDisposable
                         value.Position,
                         value.MediaKind,
                         value.DurationMilliseconds,
-                        value.LoopVideo)).ToArray());
+                        value.LoopVideo,
+                        ReadCaptionContentVersionId(value.Playback),
+                        IsCaptionAsset(value.Playback),
+                        ReadCaptionText(value.Playback))).ToArray());
                 completed = true;
                 return new ContentCacheActivation(activeManifest, files);
             }
@@ -518,26 +521,73 @@ public sealed class ContentCacheStore : IDisposable
             manifest.EndsAtUtc is { Offset: var endOffset } && endOffset != TimeSpan.Zero ||
             manifest.StartsAtUtc.HasValue && manifest.EndsAtUtc.HasValue &&
             manifest.EndsAtUtc <= manifest.StartsAtUtc ||
-            manifest.Assets.Count is < 1 or > 100 ||
+            manifest.Assets.Count is < 1 or > 200 ||
             manifest.Assets.Select(value => value.ContentVersionId).Distinct().Count() != manifest.Assets.Count)
         {
             throw new InvalidDataException("Desired-state manifest bindings are invalid.");
         }
 
         var ordered = manifest.Assets.OrderBy(value => value.Position).ToArray();
+        var captionIds = ordered
+            .Where(value => IsCaptionAsset(value.Playback))
+            .Select(value => value.ContentVersionId)
+            .ToHashSet();
         for (var index = 0; index < ordered.Length; index++)
         {
             var asset = ordered[index];
+            var captionContentVersionId = ReadCaptionContentVersionId(asset.Playback);
+            var validCaptionText = TryReadCaptionText(asset.Playback, out var captionText);
+            var supportsCaption = asset.MediaKind is "jpeg" or "png" or "webP" or "mp4";
             if (asset.Position != index || asset.ContentVersionId == Guid.Empty || asset.ByteLength <= 0 ||
                 !IsSha256Hex(asset.Sha256) || asset.MediaKind is not ("plainText" or "jpeg" or "png" or "webP" or "mp4") ||
                 asset.DurationMilliseconds is <= 0 || asset.DurationMilliseconds is > 86_400_000 ||
                 asset.MediaKind != "mp4" && asset.DurationMilliseconds is null ||
-                asset.MediaKind != "mp4" && asset.LoopVideo)
+                asset.MediaKind != "mp4" && asset.LoopVideo ||
+                IsCaptionAsset(asset.Playback) && asset.MediaKind != "plainText" ||
+                !validCaptionText || captionText is not null && !supportsCaption ||
+                captionText is not null && captionContentVersionId.HasValue ||
+                captionContentVersionId.HasValue &&
+                (!supportsCaption || !captionIds.Contains(captionContentVersionId.Value)))
             {
                 throw new InvalidDataException("Desired-state manifest contains an invalid asset.");
             }
         }
     }
+
+    private static Guid? ReadCaptionContentVersionId(JsonElement playback) =>
+        playback.ValueKind == JsonValueKind.Object &&
+        playback.TryGetProperty("captionContentVersionId", out var value) &&
+        value.ValueKind == JsonValueKind.String && value.TryGetGuid(out var captionId) && captionId != Guid.Empty
+            ? captionId
+            : null;
+
+    private static string? ReadCaptionText(JsonElement playback) =>
+        TryReadCaptionText(playback, out var captionText) ? captionText : null;
+
+    private static bool TryReadCaptionText(JsonElement playback, out string? captionText)
+    {
+        captionText = null;
+        if (playback.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+        if (!playback.TryGetProperty("captionText", out var value))
+        {
+            return true;
+        }
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        captionText = value.GetString()?.Trim();
+        return !string.IsNullOrEmpty(captionText) && captionText.Length <= 1000;
+    }
+
+    private static bool IsCaptionAsset(JsonElement playback) =>
+        playback.ValueKind == JsonValueKind.Object &&
+        playback.TryGetProperty("role", out var value) &&
+        value.ValueKind == JsonValueKind.String && value.GetString() == "caption";
 
     private static async Task<byte[]> ReadBoundedAsync(
         Stream input,

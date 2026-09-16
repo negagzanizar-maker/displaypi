@@ -13,9 +13,12 @@ public sealed class DesiredStateCompilationService(DisplayControlDbContext dbCon
         Guid playlistVersionId,
         CancellationToken cancellationToken)
     {
-        var playlistVersion = await dbContext.PlaylistVersions.AsNoTracking().SingleOrDefaultAsync(
-            value => value.Id == playlistVersionId,
-            cancellationToken);
+        var playlistVersion = await (
+            from version in dbContext.PlaylistVersions.AsNoTracking()
+            join playlist in dbContext.Playlists.AsNoTracking()
+                on version.PlaylistId equals playlist.Id
+            where version.Id == playlistVersionId && playlist.ArchivedAtUtc == null
+            select version).SingleOrDefaultAsync(cancellationToken);
         if (playlistVersion is null)
         {
             throw new AssignmentPublicationException("playlist_not_found", "Playlist version was not found.");
@@ -32,7 +35,20 @@ public sealed class DesiredStateCompilationService(DisplayControlDbContext dbCon
             .Where(value => value.PlaylistVersionId == playlistVersionId)
             .OrderBy(value => value.Position)
             .ToListAsync(cancellationToken);
-        var contentIds = items.Select(value => value.ContentVersionId).ToArray();
+        var captionIds = new List<Guid>();
+        foreach (var item in items)
+        {
+            if (!PlaylistItemPresentation.TryRead(item.PresentationJson, out var captionId, out _))
+            {
+                throw new AssignmentPublicationException(
+                    "playlist_presentation_invalid",
+                    "Playlist presentation metadata is invalid.");
+            }
+
+            if (captionId.HasValue) captionIds.Add(captionId.Value);
+        }
+
+        var contentIds = items.Select(value => value.ContentVersionId).Concat(captionIds).Distinct().ToArray();
         var versions = await dbContext.ContentVersions.AsNoTracking()
             .Where(value => contentIds.Contains(value.Id))
             .ToDictionaryAsync(value => value.Id, cancellationToken);
@@ -40,7 +56,7 @@ public sealed class DesiredStateCompilationService(DisplayControlDbContext dbCon
         var assets = await dbContext.ContentAssets.AsNoTracking()
             .Where(value => assetIds.Contains(value.Id))
             .ToDictionaryAsync(value => value.Id, cancellationToken);
-        if (items.Count == 0 || versions.Count != items.Count ||
+        if (items.Count == 0 || versions.Count != contentIds.Length ||
             versions.Values.Any(value => value.ApprovedAtUtc is null || value.ScanState != "clean" ||
                 !assets.TryGetValue(value.ContentAssetId, out var asset) ||
                 asset.LifecycleState != ContentLifecycleState.Approved))
@@ -50,20 +66,44 @@ public sealed class DesiredStateCompilationService(DisplayControlDbContext dbCon
                 "Playlist content is no longer approved.");
         }
 
-        return items.Select(item =>
+        var manifestAssets = items.Select((item, position) =>
         {
             var version = versions[item.ContentVersionId];
             var asset = assets[version.ContentAssetId];
             return new DesiredStateManifestAsset(
                 version.Id,
-                item.Position,
+                position,
                 asset.MediaKind,
                 version.ByteLength,
                 version.Sha256,
                 item.DurationMilliseconds,
                 item.LoopVideo,
                 item.PresentationJson);
-        }).ToArray();
+        }).ToList();
+
+        foreach (var captionId in captionIds.Distinct())
+        {
+            var version = versions[captionId];
+            var asset = assets[version.ContentAssetId];
+            if (asset.MediaKind != MediaKind.PlainText)
+            {
+                throw new AssignmentPublicationException(
+                    "playlist_caption_invalid",
+                    "Video captions must reference approved text content.");
+            }
+
+            manifestAssets.Add(new DesiredStateManifestAsset(
+                version.Id,
+                manifestAssets.Count,
+                asset.MediaKind,
+                version.ByteLength,
+                version.Sha256,
+                1_000,
+                false,
+                PlaylistItemPresentation.CaptionAssetJson()));
+        }
+
+        return manifestAssets;
     }
 
     public Task<DesiredState> CompileDeviceAssignmentAsync(

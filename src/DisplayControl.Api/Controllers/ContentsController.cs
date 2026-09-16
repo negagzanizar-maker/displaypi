@@ -77,14 +77,13 @@ public sealed class ContentsController(
             inspection = await ContentFileInspector.InspectAsync(
                 inspectionStream,
                 request.File.Length,
-                request.MediaKind,
                 cancellationToken);
         }
         catch (InvalidDataException)
         {
             return ValidationProblemResponse(
                 "content_signature_invalid",
-                "The file does not match the selected supported media format.");
+                "The file is not a supported image, video, or UTF-8 text document.");
         }
 
         var actorId = CurrentUserId();
@@ -136,6 +135,10 @@ public sealed class ContentsController(
                 actorId,
                 nowUtc);
             version.RecordScanOutcome(domainOutcome, scan.EngineVersion, scan.SafeReasonCode);
+            if (domainOutcome == ContentScanOutcome.Clean)
+            {
+                version.Approve(actorId, nowUtc);
+            }
 
             await using var transaction = await dbContext.BeginTenantTransactionAsync(tenantId, cancellationToken);
             dbContext.ContentAssets.Add(asset);
@@ -149,6 +152,18 @@ public sealed class ContentsController(
                 scan.SafeReasonCode,
                 new { versionId, mediaKind = inspection.MediaKind, byteLength = request.File.Length },
                 nowUtc));
+            if (domainOutcome == ContentScanOutcome.Clean)
+            {
+                dbContext.AuditEvents.Add(CreateAudit(
+                    tenantId,
+                    actorId,
+                    "content.automatically_approved",
+                    asset.Id,
+                    "success",
+                    null,
+                    new { versionId, scanState = version.ScanState },
+                    nowUtc));
+            }
             await dbContext.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 
@@ -185,6 +200,46 @@ public sealed class ContentsController(
             .OrderByDescending(value => value.VersionNumber)
             .FirstOrDefaultAsync(cancellationToken);
         return Ok(ToResponse(asset, version));
+    }
+
+    [HttpGet("{contentId:guid}/versions/{versionId:guid}/preview")]
+    [Authorize(Policy = AuthorizationPolicies.TenantViewer)]
+    public async Task<IActionResult> Preview(
+        Guid tenantId,
+        Guid contentId,
+        Guid versionId,
+        CancellationToken cancellationToken)
+    {
+        var content = await (
+            from asset in dbContext.ContentAssets.AsNoTracking()
+            join version in dbContext.ContentVersions.AsNoTracking()
+                on asset.Id equals version.ContentAssetId
+            where asset.Id == contentId && version.Id == versionId &&
+                asset.LifecycleState == ContentLifecycleState.Approved &&
+                version.ScanState == "clean" && version.ApprovedAtUtc != null
+            select new
+            {
+                version.StorageKey,
+                version.DetectedMimeType,
+                version.ByteLength,
+                version.Sha256
+            }).SingleOrDefaultAsync(cancellationToken);
+        if (content is null)
+        {
+            return NotFound();
+        }
+
+        var objectKey = new PrivateObjectKey(tenantId, versionId);
+        if (!string.Equals(objectKey.ToString(), content.StorageKey, StringComparison.Ordinal) ||
+            !await objectStore.ExistsAsync(objectKey, cancellationToken))
+        {
+            return NotFound();
+        }
+
+        var stream = await objectStore.OpenReadAsync(objectKey, cancellationToken);
+        Response.Headers.ETag = $"\"{Convert.ToHexString(content.Sha256).ToLowerInvariant()}\"";
+        Response.ContentLength = content.ByteLength;
+        return File(stream, content.DetectedMimeType, enableRangeProcessing: true);
     }
 
     [HttpPost("{contentId:guid}/versions/{versionId:guid}/approve")]
@@ -360,8 +415,6 @@ public sealed class ContentUploadRequest
 {
     [Required, StringLength(200, MinimumLength = 1)]
     public string Title { get; init; } = string.Empty;
-
-    public MediaKind MediaKind { get; init; }
 
     [Required]
     public IFormFile File { get; init; } = null!;

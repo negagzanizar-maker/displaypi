@@ -9,7 +9,7 @@ The platform spans tenant administration, identity, devices, licensing, content,
 
 ## Decision
 
-Build one ASP.NET Core modular monolith and one PostgreSQL database, with explicit in-process module boundaries. Deploy a separate C# agent plus locally served React/Chromium player to every Pi. Private object storage, scanner, email and protected key services are external infrastructure adapters, not domain microservices.
+Build one ASP.NET Core modular monolith and one relational database, with explicit in-process module boundaries. ADR-007 selects SQL Server 2022 as the current provider. Deploy a separate C# agent plus locally served React/Chromium player to every Pi. Private object storage, scanner, email and protected key services are external infrastructure adapters, not domain microservices.
 
 ## Consequences
 

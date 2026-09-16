@@ -1,4 +1,4 @@
-using Npgsql;
+using Microsoft.Data.SqlClient;
 
 namespace DisplayControl.Api.Operations;
 
@@ -72,20 +72,20 @@ public static class ProductionConfigurationValidator
 
     private static void ValidateDatabaseTransport(string connectionString)
     {
-        NpgsqlConnectionStringBuilder builder;
+        SqlConnectionStringBuilder builder;
         try
         {
-            builder = new NpgsqlConnectionStringBuilder(connectionString);
+            builder = new SqlConnectionStringBuilder(connectionString);
         }
         catch (ArgumentException exception)
         {
             throw new InvalidOperationException("The production database connection string is invalid.", exception);
         }
 
-        if (builder.SslMode is not (SslMode.VerifyCA or SslMode.VerifyFull))
+        if (!builder.Encrypt || builder.TrustServerCertificate)
         {
             throw new InvalidOperationException(
-                "Production PostgreSQL must use SSL Mode VerifyCA or VerifyFull without trusting an unverified server certificate.");
+                "Production SQL Server must use Encrypt=true and TrustServerCertificate=false.");
         }
     }
 

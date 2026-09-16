@@ -32,6 +32,7 @@ public sealed class SessionBootstrapTests : IClassFixture<WebApplicationFactory<
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(body);
         Assert.False(body.Authenticated);
+        Assert.True(body.MfaRequired);
         Assert.NotEmpty(body.CsrfToken);
         var cookie = Assert.Single(response.Headers.GetValues("Set-Cookie"));
         Assert.Contains("__Host-dc.csrf=", cookie, StringComparison.Ordinal);

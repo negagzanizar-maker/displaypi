@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using System.Text.Json;
 using DisplayControl.Api.Pagination;
+using DisplayControl.Api.Realtime;
 using DisplayControl.Api.Scheduling;
 using DisplayControl.Api.Security;
 using DisplayControl.Application.Content;
@@ -19,6 +20,7 @@ namespace DisplayControl.Api.Controllers;
 public sealed class GroupAssignmentsController(
     DisplayControlDbContext dbContext,
     DesiredStateCompilationService compilationService,
+    DeviceStateChangeNotifications notifications,
     TimeProvider timeProvider) : ControllerBase
 {
     [HttpGet]
@@ -100,16 +102,17 @@ public sealed class GroupAssignmentsController(
             });
         }
 
-        var intersectingGroupIds = await dbContext.DeviceGroupMembers.AsNoTracking()
+        var memberGroupIds = await dbContext.DeviceGroupMembers.AsNoTracking()
             .Where(value => memberIds.Contains(value.DeviceId))
             .Select(value => value.DeviceGroupId)
             .Distinct()
             .ToListAsync(cancellationToken);
-        var samePriority = await dbContext.GroupAssignments.AsNoTracking()
-            .Where(value => intersectingGroupIds.Contains(value.DeviceGroupId) &&
-                value.IsEnabled && value.Priority == request.Priority)
+        var existingAssignments = await dbContext.GroupAssignments.AsNoTracking()
+            .Where(value => memberGroupIds.Contains(value.DeviceGroupId) &&
+                value.IsEnabled &&
+                value.Priority == request.Priority)
             .ToListAsync(cancellationToken);
-        if (samePriority.Any(value => AssignmentSchedule.Overlaps(
+        if (!request.OverrideEqualPriority && existingAssignments.Any(value => AssignmentSchedule.Overlaps(
                 value.StartsAtUtc,
                 value.EndsAtUtc,
                 request.StartsAtUtc,
@@ -117,7 +120,7 @@ public sealed class GroupAssignmentsController(
         {
             return DeviceAssignmentsController.ConflictProblem(
                 "assignment_priority_collision",
-                "An overlapping group assignment already uses this priority for at least one member device.");
+                "The requested schedule overlaps an equal-priority group assignment for one or more devices.");
         }
 
         var actorId = CurrentUserId();
@@ -164,10 +167,12 @@ public sealed class GroupAssignmentsController(
                 desiredStateCount = desiredStates.Count,
                 request.StartsAtUtc,
                 request.EndsAtUtc,
-                request.Priority
+                request.Priority,
+                request.OverrideEqualPriority
             }),
             nowUtc));
         await dbContext.SaveChangesAsync(cancellationToken);
+        notifications.Enqueue(tenantId, memberIds);
         return CreatedAtAction(
             nameof(List),
             new { tenantId, groupId },
@@ -202,7 +207,8 @@ public sealed record PublishGroupAssignmentRequest(
     [param: Range(-1000, 1000)] int Priority = 0,
     DateTimeOffset? StartsAtUtc = null,
     DateTimeOffset? EndsAtUtc = null,
-    [param: Required, StringLength(80, MinimumLength = 1)] string PresentationTimeZone = "UTC");
+    [param: Required, StringLength(80, MinimumLength = 1)] string PresentationTimeZone = "UTC",
+    bool OverrideEqualPriority = false);
 
 public sealed record GroupAssignmentResponse(
     Guid Id,

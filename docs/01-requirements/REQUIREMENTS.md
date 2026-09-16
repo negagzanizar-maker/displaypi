@@ -151,7 +151,7 @@ Every `MUST` requirement requires authoritative implementation and verification 
 | SEC-001 | Production communication MUST use validated TLS; administrative pages MUST use HSTS and appropriate secure headers. |
 | SEC-002 | Administration UI and API SHOULD be same-origin; CORS MUST be disabled unless an explicit allowlist and test proves it is necessary. |
 | SEC-003 | The administration UI MUST deploy a restrictive Content Security Policy and avoid unsafe dynamic code execution. |
-| SEC-004 | Tenant database isolation MUST use application authorization plus PostgreSQL `ENABLE` and `FORCE ROW LEVEL SECURITY` default-deny policies on tenant-owned tables. |
+| SEC-004 | Tenant database isolation MUST use application authorization plus SQL Server filter/block security predicates that default-deny tenant-owned tables. |
 | SEC-005 | Runtime database roles MUST not own RLS-protected tables, be superusers, or hold `BYPASSRLS`; migration and runtime principals MUST be distinct. |
 | SEC-006 | Tenant context applied to the database connection MUST be transaction-scoped, reset safely with pooled connections, and covered by positive and negative integration tests. |
 | SEC-007 | Secrets and signing/CA keys MUST be supplied through protected secret/key management, never committed, never placed in frontend bundles, and rotated through documented procedures. |
@@ -186,7 +186,7 @@ Every `MUST` requirement requires authoritative implementation and verification 
 | ID | Requirement |
 |---|---|
 | VER-001 | Backend domain logic MUST have unit tests, especially licence boundaries, permission decisions, schedule compilation, and trusted-time behavior. |
-| VER-002 | PostgreSQL-backed integration tests MUST prove RLS and application authorization for allowed, denied, cross-tenant, missing-context, and privileged-operation cases. |
+| VER-002 | SQL Server 2022-backed integration tests MUST prove RLS and application authorization for allowed, denied, cross-tenant, missing-context, and privileged-operation cases. |
 | VER-003 | Authentication tests MUST cover invitation, verification, password/reset, MFA, recovery, lockout, rate limits, CSRF, session rotation, expiry, revocation, and role change. |
 | VER-004 | Device tests MUST cover enrollment, replay, expiry, wrong tenant/certificate, rotation, revocation, duplicate identity, heartbeat backoff, and version compatibility. |
 | VER-005 | Licence tests MUST cover boundary instants, renewal, suspension, revocation, transfer, offline maximum, actual-expiry bound, bad signatures/bindings, restart, and clock rollback. |

@@ -91,6 +91,18 @@ public sealed class DeviceLicenseTests
     }
 
     [Fact]
+    public void LeaseTelemetryDoesNotInvalidateAdministrativeConcurrencyToken()
+    {
+        var license = new DeviceLicense(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Now, Now.AddDays(30), Now);
+        var administrativeToken = license.ConcurrencyToken;
+
+        license.RecordLeaseIssued(Now.AddHours(24), Now.AddMinutes(1));
+
+        Assert.Equal(administrativeToken, license.ConcurrencyToken);
+        Assert.Equal(Now.AddMinutes(1), license.UpdatedAtUtc);
+    }
+
+    [Fact]
     public void TransferredSourceCannotBeSuspendedRenewedOrReactivated()
     {
         var license = new DeviceLicense(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Now, Now.AddDays(30), Now);

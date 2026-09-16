@@ -9,8 +9,8 @@ Every goal updates requirements, ADRs, threat model where relevant, tests, trace
 | Goal | Outcome | Required exit evidence | Status |
 |---|---|---|---|
 | 1. Specification and security design | Approved scope, roles, states, requirements, architecture, data/API outlines, threat model, tests, report plan | Goal 1 checklist and document consistency audit | Complete — 2026-08-15 |
-| 2. Engineering foundation | Git/monorepo, pinned tools, React apps, API, agent, test projects, PostgreSQL dev stack, CI and doc skeleton | Locked clean builds/tests in dev and CI | Implemented locally; remote CI evidence open |
-| 3. Secure backend/data core | Domain core, migrations, forced RLS, media abstraction, validation/errors, audit/outbox, logging/health | PostgreSQL integration and isolation gate | Complete locally — 2026-08-15; remote CI evidence open |
+| 2. Engineering foundation | Git/monorepo, pinned tools, React apps, API, agent, test projects, SQL Server dev stack, CI and doc skeleton | Locked clean builds/tests in dev and CI | Implemented locally; remote CI evidence open |
+| 3. Secure backend/data core | Domain core, migrations, SQL Server RLS, media abstraction, validation/errors, audit/outbox, logging/health | SQL Server integration and isolation gate | Complete locally; SQL Server migration revalidated 2026-09-11; remote CI evidence open |
 | 4. Human identity and access | Invitations, verification, passwords/reset, MFA, sessions, CSRF, rate limits, RBAC | Identity/authorization matrix and E2E evidence | Core, recent-MFA step-up and deterministic browser identity checks complete locally; external SMTP and live-backend E2E open |
 | 5. Administration modules | Tenants/members, devices/groups, licences/transfers, content, playlists, assignments, audit UI/API | Module integration and role acceptance evidence | Tenant and platform workflows, groups, bounded schedules, precedence and transfer UI complete locally |
 | 6. Trusted Pi identity | Enrollment, local keys, mTLS, rotation/revocation, inventory, heartbeats, versions | Real TLS protocol tests and Pi enrollment evidence | Local real-Kestrel mTLS and enrollment/rotation replay safety pass; physical Pi and production edge evidence open |
@@ -30,7 +30,7 @@ Every goal updates requirements, ADRs, threat model where relevant, tests, trace
 - [x] Stable normative requirement IDs drafted.
 - [x] Actors, permissions, use cases, state models and invariants drafted.
 - [x] Architecture, deployment/trust boundaries and critical flows drafted.
-- [x] Logical data model and PostgreSQL RLS baseline drafted.
+- [x] Logical data model and SQL Server RLS baseline implemented and tested.
 - [x] Human/device API and local player protocol outline drafted.
 - [x] Threat model reconciled and risk register complete.
 - [x] Individual requirement traceability baseline complete.
@@ -46,7 +46,7 @@ Backend/data/identity foundations precede full UI polish. Device protocol domain
 
 ## Current implementation note — 2026-08-15
 
-The repository now contains a locally verified secure vertical slice. It includes invitation-only human identity with TOTP MFA and revocable sessions; PostgreSQL 18 forced RLS; tenant member, device, licence, content, playlist, assignment and audit APIs; one-time device enrollment; ECDSA client certificates and rotation; mTLS-bound heartbeats; ES256 offline leases capped at 24 hours and at the real licence/certificate expiry; streamed content inspection and fail-closed ClamAV scanning; immutable private content; canonical desired-state manifests; verified content-addressed Pi caching; a loopback-only player; connected React administration workflows; and hardened agent/kiosk systemd units.
+The repository now contains a locally verified secure vertical slice. It includes invitation-only human identity with TOTP MFA and revocable sessions; SQL Server 2022 RLS filter/block policies; tenant member, device, licence, content, playlist, assignment and audit APIs; one-time device enrollment; ECDSA client certificates and rotation; mTLS-bound heartbeats; ES256 offline leases capped at 24 hours and at the real licence/certificate expiry; streamed content inspection and fail-closed ClamAV scanning; immutable private content; canonical desired-state manifests; verified content-addressed Pi caching; a loopback-only player; connected React administration workflows; and hardened agent/kiosk systemd units.
 
 The implementation does not yet claim production readiness. Recent-authentication enforcement, platform administration, group and bounded-schedule precedence, replay-safe device enrollment/rotation, interrupted-download resume, a real Kestrel mTLS listener test and an initial Playwright/axe browser gate now pass locally. Remaining gates include remote CI, real SMTP invitation/recovery delivery, live-backend browser journeys, manual accessibility, general human-command idempotency, Pi 4/5 media/reboot/clock/outage/disk-pressure tests, multi-node private object storage if that topology is selected, production edge TLS/secrets/monitoring/backup and restore, signed agent updates, load/ASVS testing, and the final French DOCX/PDF report.
 

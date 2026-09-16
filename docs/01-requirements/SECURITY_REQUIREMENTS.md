@@ -65,15 +65,15 @@ This document refines the cross-cutting requirements in `REQUIREMENTS.md`. Its c
 | SEC-AUT-007 | Background jobs MUST process one authenticated/recorded tenant context per transaction and cannot use an ordinary all-tenant runtime bypass. |
 | SEC-TEN-001 | Every tenant-owned row, including audit and credential metadata, MUST contain an immutable non-null `tenant_id`. |
 | SEC-TEN-002 | Tenant relationships MUST use composite or equivalent constraints that prevent a child from referencing another tenant's parent. |
-| SEC-TEN-003 | EF Core tenant filters MAY provide defense in depth; PostgreSQL RLS plus application authorization remain authoritative. |
+| SEC-TEN-003 | EF Core tenant filters MAY provide defense in depth; SQL Server RLS security policies plus application authorization remain authoritative. |
 | SEC-TEN-004 | Every tenant table MUST use `ENABLE ROW LEVEL SECURITY`, `FORCE ROW LEVEL SECURITY`, explicit `USING`/`WITH CHECK`, and default-deny when context is absent. |
 | SEC-TEN-005 | Separate schema owner/migration, runtime, backup, and monitoring roles MUST exist. Runtime is not owner/superuser/`BYPASSRLS`, cannot alter policy, `TRUNCATE`, create in trusted schemas, or `SET ROLE` to privilege. |
 | SEC-TEN-006 | Each request/job MUST begin a transaction and set tenant context using parameterized transaction-local `set_config`; session-scoped pooled tenant state is forbidden. |
 | SEC-TEN-007 | Runtime `search_path` MUST contain only trusted schemas where untrusted roles cannot create objects. |
-| SEC-TEN-008 | CI MUST inspect PostgreSQL catalogs for protected tables, policies, forced/enabled flags, owners, grants, roles, and tenant constraints. |
+| SEC-TEN-008 | CI MUST inspect SQL Server catalogs for protected tables, enabled security policies/predicates, owners, grants, roles, and tenant constraints. |
 | SEC-TEN-009 | Cross-tenant CRUD/query/download tests MUST use the real restricted runtime role and include missing/tampered context plus pooled-connection reuse. |
 | SEC-TEN-010 | Backups MUST use a deliberate audited role/configuration that fails when RLS would silently filter data. |
-| SEC-TEN-011 | API errors MUST avoid exposing cross-tenant values through PostgreSQL uniqueness/referential errors, which can bypass row visibility checks. |
+| SEC-TEN-011 | API errors MUST avoid exposing cross-tenant values through SQL Server uniqueness/referential errors, which can bypass row visibility checks. |
 
 ## 5. Device enrollment and certificate lifecycle
 
@@ -142,13 +142,13 @@ This document refines the cross-cutting requirements in `REQUIREMENTS.md`. Its c
 | ID | Requirement |
 |---|---|
 | SEC-INF-001 | Production SHOULD use TLS 1.3 per RFC 9846. Any TLS 1.2 compatibility exception uses modern AEAD-only configuration; TLS 1.0/1.1, compression, weak suites, and unsafe mutation 0-RTT are forbidden. |
-| SEC-INF-002 | Only intended HTTPS surfaces are public. PostgreSQL, storage administration, scanner, key/signing services, detailed readiness and metrics remain private. |
+| SEC-INF-002 | Only intended HTTPS surfaces are public. SQL Server, storage administration, scanner, key/signing services, detailed readiness and metrics remain private. |
 | SEC-INF-003 | Secrets MUST NOT be committed, placed in frontend/images/command lines/CI output, or shared across environments; production uses least-privileged secret management or mounted protected files. |
 | SEC-INF-004 | CA, lease, update, TLS, Data Protection, TOTP-field encryption, database, storage and backup keys/credentials MUST be separated, inventoried, owned, rotatable and revocable. |
 | SEC-INF-005 | Services/containers run non-root, drop capabilities, use read-only filesystems except explicit volumes, apply resource limits, and never mount the Docker socket. |
 | SEC-INF-006 | Pi provisioning disables unused SSH/VNC/remote services. Required SSH is key-only, allowlisted/firewalled, audited, and separate from application identity. |
 | SEC-INF-007 | Agent `systemd` confinement MUST include dedicated user, `NoNewPrivileges`, empty capability set unless justified, protected system/home/kernel controls, private temp, and explicit writable paths/address families. |
-| SEC-INF-008 | OS, Chromium, .NET, parsers/scanner, PostgreSQL, reverse proxy, and containers MUST remain supported and receive controlled security updates. |
+| SEC-INF-008 | OS, Chromium, .NET, parsers/scanner, SQL Server, reverse proxy, and containers MUST remain supported and receive controlled security updates. |
 | SEC-INF-009 | Pi application updates MUST be signed with a separate update key, verify hash/size/version/expiry, install atomically, reject rollback/freeze metadata, and retain tested last-known-good recovery. |
 | SEC-INF-010 | CI uses lockfiles, dependency/licence inventory, SBOM, secret/SAST/dependency/container scans and protected release controls; untrusted jobs receive no production secrets. |
 | SEC-INF-011 | Release artifacts MUST be traceable to source/commit, signed where deployed to Pis, and promoted rather than rebuilt differently after testing. |
@@ -158,7 +158,7 @@ This document refines the cross-cutting requirements in `REQUIREMENTS.md`. Its c
 | SEC-INF-015 | Runtime cannot update/delete audit events; security events are exported to controlled durable storage with retention/integrity monitoring. |
 | SEC-INF-016 | Alerts MUST cover brute force, cross-tenant denials, enrollment replay, duplicate/revoked credentials, clock rollback, malware/scan failure, privilege/key changes, backup failure, capacity, and device concurrency. |
 | SEC-INF-017 | Edge/application rate limits, streaming limits, quotas, timeouts, bounded queues, and device jittered backoff MUST be load-tested against abuse and retry storms. |
-| SEC-INF-018 | Backups MUST coherently cover PostgreSQL/PITR, immutable media/manifests, audit/configuration and keys required to decrypt/validate; device cache is never authoritative. |
+| SEC-INF-018 | Backups MUST coherently cover SQL Server full/differential/log recovery, immutable media/manifests, audit/configuration and keys required to decrypt/validate; device cache is never authoritative. |
 | SEC-INF-019 | Provisional production objectives are RPO 15 minutes, RTO 4 hours, daily encrypted backup, continuous WAL, 30-day retention and separate immutable/offsite copy; business approval is required before Goal 10. |
 | SEC-INF-020 | Isolated restore tests MUST prove database/media/key consistency, tenant isolation, account/session behavior, manifest integrity and licence expiry. |
 | SEC-INF-021 | Incident runbooks MUST cover account/session breach, tenant isolation failure, device clone/cert theft, signing/CA/update key compromise, malicious media, dependency incident and data loss. |
@@ -171,7 +171,7 @@ The following are release-blocking evidence groups:
 
 - `SEC-ACC-001`: completed ASVS 5.0.0 Level 2 mapping;
 - `SEC-ACC-002`: reviewed threat/data-flow model including keys, offline behavior, admin abuse and physical limitations;
-- `SEC-ACC-003`: automated PostgreSQL catalog/RLS/role/constraint inspection;
+- `SEC-ACC-003`: automated SQL Server catalog/RLS/role/constraint inspection;
 - `SEC-ACC-004`: full cross-tenant resource and storage test matrix;
 - `SEC-ACC-005`: human invitation/password/MFA/session/CSRF/rate-limit E2E matrix;
 - `SEC-ACC-006`: endpoint-by-role authorization and tampered identifier matrix;
@@ -196,7 +196,7 @@ The following are release-blocking evidence groups:
 - [OWASP Password Storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
 - [OWASP Session Management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)
 - [OWASP File Upload](https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html)
-- [PostgreSQL 18 Row Security](https://www.postgresql.org/docs/18/ddl-rowsecurity.html)
+- [SQL Server row-level security](https://learn.microsoft.com/sql/relational-databases/security/row-level-security)
 - [ASP.NET Core certificate authentication](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/certauth?view=aspnetcore-10.0)
 - [ASP.NET Core antiforgery](https://learn.microsoft.com/en-us/aspnet/core/security/anti-request-forgery?view=aspnetcore-10.0)
 - [ASP.NET Core Data Protection](https://learn.microsoft.com/en-us/aspnet/core/security/data-protection/configuration/overview?view=aspnetcore-10.0)

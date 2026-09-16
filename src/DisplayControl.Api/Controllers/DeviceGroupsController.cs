@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using System.Text.Json;
 using DisplayControl.Api.Pagination;
+using DisplayControl.Api.Realtime;
 using DisplayControl.Api.Scheduling;
 using DisplayControl.Api.Security;
 using DisplayControl.Application.Content;
@@ -20,6 +21,7 @@ namespace DisplayControl.Api.Controllers;
 public sealed class DeviceGroupsController(
     DisplayControlDbContext dbContext,
     DesiredStateCompilationService compilationService,
+    DeviceStateChangeNotifications notifications,
     TimeProvider timeProvider) : ControllerBase
 {
     [HttpGet]
@@ -264,6 +266,7 @@ public sealed class DeviceGroupsController(
             tenantId,
             nowUtc);
         await dbContext.SaveChangesAsync(cancellationToken);
+        notifications.Enqueue(tenantId, existingIds.Concat(requestedIds));
         return Ok(ToResponse(group, requestedIds));
     }
 

@@ -7,8 +7,8 @@ using DisplayControl.Infrastructure.Identity;
 using DisplayControl.Infrastructure.Persistence;
 using DisplayControl.Infrastructure.Tenancy;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
 
 namespace DisplayControl.Api.Identity;
 
@@ -95,7 +95,7 @@ public sealed class InvitationWorkflow(
             await dbContext.SaveChangesAsync(cancellationToken);
         }
         catch (DbUpdateException exception) when (
-            exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+            exception.InnerException is SqlException { Number: 2601 or 2627 })
         {
             return new InvitationCreateResult(InvitationCreateOutcome.PendingInvitationExists);
         }

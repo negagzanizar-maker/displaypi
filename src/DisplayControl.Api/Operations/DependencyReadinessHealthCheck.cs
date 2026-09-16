@@ -5,9 +5,9 @@ using DisplayControl.Application.Content;
 using DisplayControl.Application.Security;
 using DisplayControl.Application.Storage;
 using DisplayControl.Infrastructure.Persistence;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Npgsql;
 
 namespace DisplayControl.Api.Operations;
 
@@ -150,17 +150,11 @@ public sealed class DatabaseReadinessDependency(IServiceScopeFactory scopeFactor
         await using var command = dbContext.Database.GetDbConnection().CreateCommand();
         command.CommandText =
             """
-            SELECT NOT role_definition.rolsuper
-               AND NOT role_definition.rolbypassrls
-               AND NOT EXISTS (
-                   SELECT 1
-                   FROM pg_class AS relation
-                   JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-                   WHERE namespace.nspname = 'app'
-                     AND relation.relkind IN ('r', 'p')
-                     AND relation.relowner = role_definition.oid)
-            FROM pg_roles AS role_definition
-            WHERE role_definition.rolname = current_user
+            SELECT CONVERT(bit, CASE
+                WHEN IS_SRVROLEMEMBER(N'sysadmin') = 1 THEN 0
+                WHEN IS_ROLEMEMBER(N'db_owner') = 1 THEN 0
+                ELSE 1
+            END)
             """;
         if (command.Connection?.State != System.Data.ConnectionState.Open)
         {
@@ -243,9 +237,9 @@ public sealed class NotificationReadinessDependency(IServiceProvider serviceProv
         timeoutSource.CancelAfter(TimeSpan.FromSeconds(5));
         try
         {
-            await using var connection = new NpgsqlConnection(options.DatabaseConnectionString);
+            await using var connection = new SqlConnection(options.DatabaseConnectionString);
             await connection.OpenAsync(timeoutSource.Token);
-            await using (var command = new NpgsqlCommand("SELECT 1", connection))
+            await using (var command = new SqlCommand("SELECT 1", connection))
             {
                 await command.ExecuteScalarAsync(timeoutSource.Token);
             }
@@ -255,7 +249,7 @@ public sealed class NotificationReadinessDependency(IServiceProvider serviceProv
             return smtp.Connected;
         }
         catch (Exception exception) when (
-            exception is NpgsqlException or SocketException or IOException or OperationCanceledException)
+            exception is SqlException or SocketException or IOException or OperationCanceledException)
         {
             return false;
         }

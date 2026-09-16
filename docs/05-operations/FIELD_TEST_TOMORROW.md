@@ -19,7 +19,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Build-PiFieldTes
 
 The command creates the ignored directory `artifacts/pi-field-test` containing:
 
-- `display-control-pi-linux-arm64-0.1.5-field-test.tar.gz`;
+- `display-control-pi-linux-arm64-0.1.8-final.tar.gz`;
 - its `.sha256` file;
 - the `deploy-pi` installer directory.
 
@@ -60,9 +60,12 @@ Use the address belonging to Wi-Fi, for example `192.168.1.25`. If the company W
 
 Run once, replacing the example address:
 
+The existing `.data/field-test` directory contains older IP-bound TLS material and must not be reused.
+
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/New-FieldTestEnvironment.ps1 `
-  -ServerHost 192.168.1.25
+  -ServerHost 192.168.1.25 `
+  -OutputDirectory .data/field-test-final
 ```
 
 Copy the one-time platform bootstrap token printed by the command. It is intentionally not written to a normal project file.
@@ -71,7 +74,7 @@ Trust the generated local CA for the current Windows user:
 
 ```powershell
 Import-Certificate `
-  -FilePath .data/field-test/field-test-server-ca.crt `
+  -FilePath .data/field-test-final/field-test-server-ca.crt `
   -CertStoreLocation Cert:\CurrentUser\Root
 ```
 
@@ -84,14 +87,15 @@ New-NetFirewallRule -DisplayName 'Display Control field test' `
 
 ### 3. Start the server
 
-Start Docker Desktop, then:
+Start Docker Desktop. Stop the older auto-restarting development stack first so its loopback SQL Server and ClamAV ports do not conflict, then start the fresh server:
 
 ```powershell
+docker compose down
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
-  -File .data/field-test/start-field-test-server.ps1
+  -File .data/field-test-final/start-field-test-server.ps1
 ```
 
-The launcher starts PostgreSQL and ClamAV, applies the migrations, builds the administration UI, and serves the API over HTTPS. Keep this terminal open. Verify from the laptop and Pi:
+The launcher starts SQL Server 2022 and ClamAV, applies the SQL Server migrations, builds the administration UI, and serves the API over HTTPS. The generated Development environment uses email-and-password sign-in without an MFA prompt. Keep this terminal open. Verify from the laptop and Pi:
 
 ```text
 https://192.168.1.25:7443/_health/live
@@ -108,7 +112,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/New-PlatformAdmi
   -DisplayName 'Your name'
 ```
 
-Enter a strong password and the copied bootstrap token when prompted. Then open `https://192.168.1.25:7443`, sign in, enroll TOTP, create a customer, open its one-use invitation, accept it, sign in as the customer administrator, and enroll TOTP again.
+Enter a strong password and the copied bootstrap token when prompted. Then open `https://192.168.1.25:7443`, sign in, create a customer, copy its one-use invitation URL, sign out, accept the invitation, and sign in as the customer administrator. The generated Development field-test profile deliberately uses password-only sign-in; production keeps MFA required.
 
 ## At the internship — Raspberry Pi
 
@@ -119,8 +123,9 @@ From the customer dashboard, create an enrollment code. For the first field test
 Create `enrollment-code.txt` on the Pi containing only that code. Copy these items to one Pi directory using SSH or USB:
 
 - the `.tar.gz` release archive;
+- its `.sha256` file;
 - `deploy-pi`;
-- `.data/field-test/field-test-server-ca.crt`;
+- `.data/field-test-final/field-test-server-ca.crt`;
 - `enrollment-code.txt`.
 
 ### 2. Install
@@ -129,9 +134,9 @@ On the Pi, replace the server address and desktop username. Read the digest from
 
 ```bash
 sudo ./deploy-pi/install.sh \
-  --artifact ./display-control-pi-linux-arm64-0.1.5-field-test.tar.gz \
+  --artifact ./display-control-pi-linux-arm64-0.1.8-final.tar.gz \
   --sha256 'PASTE_THE_64_CHARACTER_SHA256' \
-  --version '0.1.5-field-test' \
+  --version '0.1.8-final' \
   --server 'https://192.168.1.25:7443' \
   --server-ca './field-test-server-ca.crt' \
   --enrollment-code-file './enrollment-code.txt' \
@@ -160,9 +165,9 @@ sudo systemctl restart display-control-kiosk
 1. Confirm that the Pi appears online with serial, network and disk inventory.
 2. Create a licence for the Pi.
 3. Upload a small PNG/JPEG, short H.264/AAC MP4, or UTF-8 text file.
-4. Wait for the scan result, approve the content, create and publish a playlist, then assign it to the Pi.
-5. Confirm synchronization and playback on the display.
-6. Suspend the licence and confirm **Not licensed** after the next heartbeat.
+4. Confirm the clean scan made the content usable automatically, create and publish a playlist, then assign it to the Pi.
+5. Confirm synchronization starts essentially immediately and playback changes without refreshing Chromium.
+6. Suspend or revoke the licence and confirm an online Pi promptly displays **Not licensed**.
 7. Reactivate it and confirm playback resumes.
 8. Disconnect Wi-Fi briefly and confirm cached playback remains bounded by the signed offline lease.
 9. Reboot the Pi and confirm the services return automatically.
@@ -177,7 +182,7 @@ Save screenshots and the two service journals as internship evidence.
 | Agent says TLS/certificate error | Correct laptop IP used when generating the environment; correct CA supplied to installer; laptop clock and Pi clock synchronized |
 | Enrollment stays pending | Enrollment code copied without spaces/newline corruption; code not expired; server terminal and agent journal |
 | Player health works but no Chromium window | Desktop user passed with `--kiosk-user`; log into desktop; restart kiosk; inspect Wayland/X11 variables in the journal |
-| Content stays synchronizing | ClamAV healthy, content approved, playlist published and assigned, sufficient free disk |
+| Content stays synchronizing | ClamAV healthy, content usable, playlist published and assigned, sufficient free disk; inspect the agent journal for the state-change stream connection |
 | Video is black or slow | First prove PNG/text; then test H.264/AAC and inspect Chromium/GPU support on the actual Pi image |
 
 This is a controlled field-test setup, not a production deployment. Remove the temporary Windows firewall rule and local CA after the test if they are no longer needed.

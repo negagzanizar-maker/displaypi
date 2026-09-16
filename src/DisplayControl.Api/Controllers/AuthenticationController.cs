@@ -28,6 +28,7 @@ public sealed class AuthenticationController(
     UniformPasswordFailureService uniformPasswordFailure,
     ISecureTokenService secureTokenService,
     TenantSecurityAuditService securityAudit,
+    HumanAuthenticationOptions humanAuthenticationOptions,
     TimeProvider timeProvider) : ControllerBase
 {
     [HttpPost("sign-in")]
@@ -108,8 +109,10 @@ public sealed class AuthenticationController(
             var confirmedMfa = await dbContext.UserMfaSecrets.AnyAsync(
                 value => value.UserId == user.Id && value.ConfirmedAtUtc != null,
                 cancellationToken);
-            var mfaRequired = isPlatformAdministrator ||
-                membership?.Role is TenantRole.TenantAdmin or TenantRole.ContentManager || user.TwoFactorEnabled;
+            var mfaRequired = humanAuthenticationOptions.RequireMfa && (
+                isPlatformAdministrator ||
+                membership?.Role is TenantRole.TenantAdmin or TenantRole.ContentManager ||
+                user.TwoFactorEnabled);
             var authenticationStage = !mfaRequired
                 ? SessionClaimTypes.FullStage
                 : confirmedMfa

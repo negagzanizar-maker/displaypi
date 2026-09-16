@@ -1,30 +1,22 @@
-# PostgreSQL Security Baseline
+# SQL Server Security Baseline
 
-## Roles
+The supported runtime database is SQL Server 2022. EF Core migrations live in `DisplayControl.SqlServerMigrations`; the migration owner is never used by the running API.
 
-- The schema owner/migration identity owns objects and is unavailable to normal application requests.
-- The runtime identity is not a table owner, superuser, member of an owner role, or holder of `BYPASSRLS`; it cannot create in trusted schemas, alter policies, truncate tables, or change roles.
-- Backup and monitoring identities will be separate and documented before production.
+## Runtime identities
 
-`deploy/postgres/runtime-role.template.sql` creates the non-login permission role without embedding credentials. A deployment-specific login identity may receive that role through the external secret/provisioning process.
+- The migration identity creates the database schema and security policies, then is removed from normal runtime configuration.
+- The API uses a restricted login that is neither `sysadmin` nor `db_owner`. Production grants are defined by `deploy/sqlserver/runtime-user.template.sql`.
+- The optional notification worker uses a separate login with only `SELECT` and `UPDATE` on `app.identity_notifications`.
+- The optional retention worker uses the exact login `display_control_maintenance` with only `SELECT` and `DELETE` on heartbeat and audit rows.
 
-## Tenant context
+The API readiness probe rejects a runtime identity that is `sysadmin` or `db_owner`. `deploy/sqlserver/verify-runtime-security.sql` additionally checks the sensitive-table permissions and confirms that every tenant-owned table has an enabled security policy.
 
-Tenant-owned transactions set `app.tenant_id` using PostgreSQL `set_config(..., true)`. The third argument makes the value transaction-local, preventing a pooled connection from retaining another tenant after commit/rollback. The value must come from authenticated server context; route/query/body values remain untrusted selectors.
+## Tenant context and row-level security
 
-Tenant-owned business tables use:
+Each trusted tenant transaction calls `sys.sp_set_session_context` with `tenant_id`. SQL Server filter predicates hide rows belonging to other tenants; block predicates reject cross-tenant inserts and updates. With no tenant context, tenant tables are fail-closed. EF query filters provide a second application-layer boundary.
 
-- non-null `tenant_id`;
-- same-tenant composite foreign keys where applicable;
-- application query filters as defense in depth;
-- `ENABLE ROW LEVEL SECURITY` and `FORCE ROW LEVEL SECURITY`;
-- one explicit `USING` and `WITH CHECK` policy; and
-- default denial when `app.tenant_id` is absent.
-
-`identity_notifications` is the narrow exception because a platform administrator has no tenant. It still has forced RLS: tenant notifications require the matching transaction context, while a `NULL` tenant is accepted only with no tenant context. The web runtime has `INSERT` only on this table and therefore cannot retrieve protected reset payloads. Delivery will use a separate worker identity with explicitly reviewed grants.
-
-Superusers and roles explicitly granted `BYPASSRLS` can bypass policies; neither is permitted for the web runtime identity. `FORCE ROW LEVEL SECURITY` also subjects the table owner during ordinary queries, although the migration owner can alter the schema and policies and therefore remains a separately controlled deployment identity. Integration tests inspect catalog flags, role attributes, missing context, cross-tenant reads/writes and connection-pool reuse using a genuinely restricted role.
+Platform catalog transactions use the separate `platform_catalog` context. Notification delivery and retention use `notification_delivery` and `data_retention`; only their narrowly granted database users can perform the corresponding table operations. Connection-pool reuse and missing/cross-tenant contexts are covered by SQL Server Testcontainers integration tests.
 
 ## Migration rule
 
-Generated EF migrations are reviewed before execution. RLS SQL, grants, destructive changes and lock behavior receive manual review. Production migration and application startup are separate operations; the web process does not auto-migrate with owner credentials.
+Generate and review SQL Server migrations before execution. Apply them through `dotnet ef database update --project src/DisplayControl.SqlServerMigrations --startup-project src/DisplayControl.Api` with a temporary migration-owner connection in `DISPLAYCONTROL_MIGRATION_CONNECTION`. Production application startup never performs owner-level migration automatically.

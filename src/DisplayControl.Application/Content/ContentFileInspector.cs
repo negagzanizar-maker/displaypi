@@ -15,7 +15,6 @@ public static class ContentFileInspector
     public static async Task<ContentFileInspection> InspectAsync(
         Stream content,
         long expectedLength,
-        MediaKind declaredKind,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(content);
@@ -26,13 +25,12 @@ public static class ContentFileInspector
 
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         var prefix = new byte[(int)Math.Min(expectedLength, InspectionPrefixLimit)];
-        var buffer = new byte[128 * 1024];
+        var buffer = new byte[InspectionPrefixLimit];
         var prefixLength = 0;
         long totalLength = 0;
-        Decoder? textDecoder = declaredKind == MediaKind.PlainText
-            ? new UTF8Encoding(false, true).GetDecoder()
-            : null;
-        var characters = textDecoder is null ? null : new char[buffer.Length];
+        Decoder? textDecoder = null;
+        char[]? characters = null;
+        var mediaSignatureChecked = false;
 
         while (true)
         {
@@ -56,7 +54,20 @@ public static class ContentFileInspector
                 prefixLength += prefixCopyLength;
             }
 
-            if (textDecoder is not null)
+            var textValidationStartedThisRead = false;
+            if (!mediaSignatureChecked && (prefixLength >= 12 || totalLength == expectedLength))
+            {
+                mediaSignatureChecked = true;
+                if (!HasSupportedBinarySignature(prefix.AsSpan(0, prefixLength)))
+                {
+                    textDecoder = new UTF8Encoding(false, true).GetDecoder();
+                    characters = new char[buffer.Length];
+                    ValidateTextChunk(textDecoder, prefix.AsSpan(0, prefixLength), characters, flush: false);
+                    textValidationStartedThisRead = true;
+                }
+            }
+
+            if (textDecoder is not null && !textValidationStartedThisRead)
             {
                 ValidateTextChunk(textDecoder, buffer.AsSpan(0, read), characters!, flush: false);
             }
@@ -73,24 +84,15 @@ public static class ContentFileInspector
         }
 
         var inspectedPrefix = prefix.AsSpan(0, prefixLength);
-        var (detectedKind, mimeType, metadataJson) = Detect(inspectedPrefix, declaredKind);
-        if (detectedKind != declaredKind)
-        {
-            throw new InvalidDataException("Declared media kind does not match the file signature.");
-        }
+        var (detectedKind, mimeType, metadataJson) = Detect(inspectedPrefix, textDecoder is not null);
 
         return new ContentFileInspection(detectedKind, mimeType, hash.GetHashAndReset(), metadataJson);
     }
 
     private static (MediaKind Kind, string MimeType, string MetadataJson) Detect(
         ReadOnlySpan<byte> prefix,
-        MediaKind declaredKind)
+        bool isValidText)
     {
-        if (declaredKind == MediaKind.PlainText)
-        {
-            return (MediaKind.PlainText, "text/plain; charset=utf-8", "{}");
-        }
-
         if (prefix.Length >= 24 && prefix[..8].SequenceEqual(
                 new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }))
         {
@@ -121,8 +123,21 @@ public static class ContentFileInspector
                 $"{{\"width\":{dimensions.Width},\"height\":{dimensions.Height}}}");
         }
 
+        if (isValidText)
+        {
+            return (MediaKind.PlainText, "text/plain; charset=utf-8", "{}");
+        }
+
         throw new InvalidDataException("The uploaded file is not an allowed media format.");
     }
+
+    private static bool HasSupportedBinarySignature(ReadOnlySpan<byte> prefix) =>
+        prefix.Length >= 8 && prefix[..8].SequenceEqual(
+            new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }) ||
+        prefix.Length >= 12 && prefix[..4].SequenceEqual("RIFF"u8) &&
+            prefix.Slice(8, 4).SequenceEqual("WEBP"u8) ||
+        prefix.Length >= 12 && prefix.Slice(4, 4).SequenceEqual("ftyp"u8) ||
+        prefix.Length >= 3 && prefix[0] == 0xFF && prefix[1] == 0xD8 && prefix[2] == 0xFF;
 
     private static (uint Width, uint Height) ReadJpegDimensions(ReadOnlySpan<byte> data)
     {

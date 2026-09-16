@@ -1,52 +1,40 @@
 # Single-node production deployment baseline
 
-This directory hardens the supported single-node topology. It does not turn unresolved provider choices or missing staging evidence into completed work. The API deliberately refuses `Deployment__InstanceCount` values other than `1`; a multi-node deployment requires shared private object storage, distributed rate limiting, and reviewed worker coordination.
+The supported baseline is one ASP.NET Core node, SQL Server 2022, private filesystem media storage, ClamAV, and separately deployed Pi agents/players. The API rejects `Deployment__InstanceCount` values other than `1`; multiple API writers require shared object storage, distributed rate limiting, and coordinated workers.
 
 ## Required external services
 
-- Linux host with public DNS and a publicly trusted TLS certificate for every value in `AllowedHosts`.
-- PostgreSQL 18 reachable through certificate-verified TLS.
+- SQL Server 2022 reachable with `Encrypt=True` and `TrustServerCertificate=False` using a trusted server certificate.
 - ClamAV reachable only from the API network.
 - Encrypted persistent volumes for content and Data Protection keys.
-- Secret manager for database credentials, token pepper, TLS certificate password, device CA, Data Protection encryption certificate, and licence-signing key.
-- Central journal/log collection, metrics/alerts, off-host encrypted backup storage, and a tested recovery environment.
-- SMTP provider when notification delivery is enabled.
+- A secret manager for database credentials, token pepper, TLS certificates, the device CA, Data Protection encryption certificate, and licence-signing key.
+- Public DNS/TLS, centralized logs and alerts, tested off-host backups, and SMTP when notifications are enabled.
+
+The reverse proxy must preserve client-certificate handling for `/device/v1` and allow unbuffered, long-lived `text/event-stream` responses on `/device/v1/state-changes`. Heartbeats remain the fallback when the SSE stream reconnects.
 
 ## Database provisioning
 
-1. Apply `deploy/postgres/schema.idempotent.sql` as the migration owner.
-2. Provision login identities separately through the secret manager.
-3. Grant the web login membership in the role created by `runtime-role.template.sql`.
-4. If enabled, provision the notification and maintenance identities using their dedicated templates.
-5. Connect as the exact web runtime login and run `verify-runtime-security.sql`. Do not start the API if it fails.
+1. Create an empty SQL Server database with a migration-owner identity.
+2. Set `DISPLAYCONTROL_MIGRATION_CONNECTION` only for the migration process.
+3. Run `dotnet ef database update --project src/DisplayControl.SqlServerMigrations --startup-project src/DisplayControl.Api`.
+4. Create the application login through the deployment secret manager and apply `deploy/sqlserver/runtime-user.template.sql` with `sqlcmd`.
+5. When enabled, provision the separate notification and maintenance logins with their templates.
+6. Connect as the exact API runtime login and run `deploy/sqlserver/verify-runtime-security.sql`. Do not start the API if it fails.
 
-The migration owner must never be used by the running application. The web runtime must not be superuser, `BYPASSRLS`, an application-table owner, or able to read protected notification payloads.
+The running API identity must never be `sa`, `sysadmin`, `db_owner`, a table owner, or able to read protected notification payloads. Production startup rejects wildcard hosts and unverified SQL Server transport; readiness independently rejects privileged database identities.
 
 ## Host installation
 
-1. Create the non-login `display-control-api` user and group.
-2. Publish the API for the target Linux runtime from the exact tested commit and install it read-only under `/opt/display-control/api`.
-3. Create `/var/lib/display-control/content` and `/var/lib/display-control/data-protection`, owned only by `display-control-api` with mode `0700`.
-4. Install secret-manager material read-only under `/etc/display-control/secrets`.
-5. Copy `api.env.example` to `/etc/display-control/api.env`, replace every placeholder, set mode `0600`, and allow the service group to read it.
-6. Install `display-control-api.service`, run `systemd-analyze verify`, reload systemd, and enable the service.
+1. Publish the tested release and install it read-only under `/opt/display-control/api` using the non-login `display-control-api` service account.
+2. Create `/var/lib/display-control/content` and `/var/lib/display-control/data-protection` with owner-only permissions on encrypted storage.
+3. Install secret-manager material read-only under `/etc/display-control/secrets`.
+4. Copy `api.env.example` to `/etc/display-control/api.env`, replace every placeholder, and set mode `0600`.
+5. Install `display-control-api.service`, run `systemd-analyze verify`, reload systemd, and enable the service.
 
-Production startup rejects wildcard hosts, unverified PostgreSQL TLS, missing key files, overlapping content/key paths, missing public TLS configuration, and an invalid Data Protection encryption certificate. Readiness also rejects a superuser or `BYPASSRLS` database identity.
+Human MFA remains mandatory in production. Password-only sign-in is rejected outside Development and Testing.
 
-## Backup and restore
+## Backup and release gate
 
-`offline-backup.sh` deliberately refuses to run while the API service is active. This keeps PostgreSQL metadata, private media, and Data Protection keys from changing during capture. Store the resulting archive and checksum off-host using encryption and immutability controls.
+The checked-in legacy PostgreSQL backup shell scripts are not valid for SQL Server and must not be used. Production acceptance requires a documented SQL Server full/differential/log backup policy and an isolated restore drill that restores the database, media, Data Protection keys, CA/signing material, and then proves tenant isolation and playback.
 
-`verify-backup.sh` checks the archive hashes and formats. Release acceptance still requires an isolated restore drill:
-
-1. create an empty recovery PostgreSQL instance;
-2. restore `database.dump` using `pg_restore`;
-3. restore media and Data Protection keys to empty dedicated directories;
-4. restore the separately protected CA/signing/encryption keys and secrets;
-5. start the exact release in the recovery environment;
-6. prove tenant isolation, login/session behavior, manifest hashes, media delivery, and licence expiry;
-7. record recovery time, recovery point, commands, tester, commit, and evidence hashes.
-
-## Release gate
-
-Before public production use, retain evidence for a real SMTP test, live browser-to-API-to-PostgreSQL E2E, expected-fleet load, network/storage/scanner faults, backup restoration, vulnerability scanning, and an independent security review. Physical Pi acceptance remains a separate hardware gate.
+Before public use, retain evidence for SMTP, live browser/API/SQL Server E2E, expected-fleet load, network/storage/scanner faults, backup restoration, vulnerability scanning, and independent security review. Physical Raspberry Pi acceptance remains a separate hardware gate.

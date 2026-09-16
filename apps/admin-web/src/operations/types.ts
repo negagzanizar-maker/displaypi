@@ -14,9 +14,33 @@ export type Device = {
   health: string
   hostname: string | null
   serialNumber: string | null
+  osDescription?: string | null
+  architecture?: string | null
+  agentVersion?: string | null
+  playerVersion?: string | null
+  diskCapacityBytes?: number | null
+  freeDiskBytes?: number | null
+  serverObservedIp?: string | null
   networkInterfaces: DeviceNetwork[]
   licenseState: string | null
   licenseExpiresAtUtc: string | null
+  concurrencyToken: string
+  lastSeenUtc?: string | null
+  appliedManifestVersion?: number | null
+  playbackHealthCode?: string | null
+  playback?: DevicePlayback | null
+}
+
+export type DevicePlayback = {
+  playerState: string
+  contentVersionId: string | null
+  contentId: string | null
+  title: string | null
+  mediaKind: string | null
+  desiredStateVersion: number | null
+  reportedAtUtc: string
+  errorCode: string | null
+  captionText: string | null
 }
 
 export type License = {
@@ -65,7 +89,18 @@ export type Playlist = {
   id: string
   name: string
   description: string | null
+  concurrencyToken: string
   latestVersion: PlaylistVersion | null
+}
+
+export type PlaylistItem = {
+  id: string
+  contentVersionId: string
+  title: string
+  mediaKind: string
+  position: number
+  durationMilliseconds: number | null
+  loopVideo: boolean
 }
 
 export type EnrollmentCode = {

@@ -37,7 +37,7 @@ Every row initially has status `Specified`. Empty evidence is intentional and mu
 
 | Requirement prefix | Primary acceptance family | Principal proof boundary |
 |---|---|---|
-| `TEN` | `AC-TEN` | API authorization, PostgreSQL RLS, private storage |
+| `TEN` | `AC-TEN` | API authorization, SQL Server RLS, private storage |
 | `IAM` | `AC-IAM` | ASP.NET authentication/session and browser E2E |
 | `DEV` | `AC-DEV` | Enrollment, real mTLS path, agent and physical Pi |
 | `LIC` | `AC-LIC` | Backend/agent protocol, signed vectors and trusted time |

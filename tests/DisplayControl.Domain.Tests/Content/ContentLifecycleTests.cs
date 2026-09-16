@@ -7,15 +7,13 @@ public sealed class ContentLifecycleTests
     private static readonly DateTimeOffset NowUtc = new(2026, 8, 15, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public void CleanContentRequiresExplicitApproval()
+    public void CleanContentBecomesAutomaticallyUsable()
     {
         var creatorId = Guid.NewGuid();
         var asset = new ContentAsset(Guid.NewGuid(), Guid.NewGuid(), "Lobby", MediaKind.Png, creatorId, NowUtc);
 
         asset.RecordScanOutcome(ContentScanOutcome.Clean, NowUtc.AddSeconds(1));
 
-        Assert.Equal(ContentLifecycleState.Draft, asset.LifecycleState);
-        asset.Approve(NowUtc.AddSeconds(2));
         Assert.Equal(ContentLifecycleState.Approved, asset.LifecycleState);
     }
 

@@ -12,7 +12,7 @@ The terms **Given**, **When**, and **Then** describe preconditions, action, and 
 
 - **Given** two active tenants containing users, devices, licences, content, playlists, assignments, audit records, and stored objects,
 - **when** any Tenant A role attempts every supported list/read/create/update/delete/export/download operation using Tenant B identifiers or manipulated tenant context,
-- **then** the operation reveals and changes no Tenant B data, returns a safe denial, records an appropriate security event, and the restricted PostgreSQL runtime role independently prevents cross-tenant row access.
+- **then** the operation reveals and changes no Tenant B data, returns a safe denial, records an appropriate security event, and the restricted SQL Server runtime login plus RLS security policies independently prevent cross-tenant row access.
 
 ### AC-TEN-002 — Missing tenant context defaults to denial
 
@@ -226,7 +226,7 @@ The terms **Given**, **When**, and **Then** describe preconditions, action, and 
 
 - **Given** a release candidate,
 - **when** quality gates are evaluated,
-- **then** locked builds, unit/component tests, real PostgreSQL RLS tests, real TLS/mTLS tests, browser E2E, ASVS mapping, resilience/load/restore tests and Pi 4/5 hardware tests are attributable to the same release; skipped/flaky/planned tests do not count as passes.
+- **then** locked builds, unit/component tests, real SQL Server 2022 RLS tests, real TLS/mTLS tests, browser E2E, ASVS mapping, resilience/load/restore tests and Pi 4/5 hardware tests are attributable to the same release; skipped/flaky/planned tests do not count as passes.
 
 ### AC-DOC-001 — Documentation and report contain only verified claims
 

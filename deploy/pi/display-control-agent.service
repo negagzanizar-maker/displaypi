@@ -33,7 +33,7 @@ RestrictSUIDSGID=true
 RestrictRealtime=true
 LockPersonality=true
 RemoveIPC=true
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 ReadWritePaths=/var/lib/display-control
 
 [Install]

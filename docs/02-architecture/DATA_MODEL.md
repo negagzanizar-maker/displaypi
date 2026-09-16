@@ -3,7 +3,7 @@
 ## 1. Modeling conventions
 
 - Primary identifiers use application-generated UUIDs; UUIDv7 is preferred where supported and tested.
-- Authorization/audit timestamps are UTC and stored as timezone-aware PostgreSQL timestamps.
+- Authorization/audit timestamps are UTC and stored as SQL Server `datetimeoffset` values.
 - Tenant-owned tables contain a non-null `tenant_id` even where it could be inferred through a parent relation. This supports simple, auditable RLS predicates and composite integrity constraints.
 - Foreign keys between tenant-owned tables include or otherwise enforce the same tenant.
 - Mutable aggregates use optimistic concurrency tokens where conflicting administrative edits matter.
@@ -140,7 +140,7 @@ Tenant-owned grouping. Membership references must share tenant. Group changes tr
 
 ### `device_assignment` and `group_assignment`
 
-Separate tenant-owned tables target either one device or one group and reference an immutable playlist version. Both store enabled state, priority, optional effective UTC bounds, tenant presentation timezone, publisher metadata, and an optimistic concurrency token. This accepted design replaces a polymorphic target column so PostgreSQL can enforce composite same-tenant foreign keys for both target kinds. Recurring schedules remain outside v1.
+Separate tenant-owned tables target either one device or one group and reference an immutable playlist version. Both store enabled state, priority, optional effective UTC bounds, tenant presentation timezone, publisher metadata, and an optimistic concurrency token. This accepted design replaces a polymorphic target column so SQL Server can enforce composite same-tenant foreign keys for both target kinds. Recurring schedules remain outside v1.
 
 ### `desired_state`
 

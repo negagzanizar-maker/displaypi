@@ -29,14 +29,15 @@ public sealed partial class DisplayControlDbContext
         var entity = modelBuilder.Entity<EnrollmentToken>();
         entity.ToTable("enrollment_tokens", table =>
         {
-            table.HasCheckConstraint("ck_enrollment_tokens_digest", "octet_length(token_digest) = 32");
+            table.HasCheckConstraint("ck_enrollment_tokens_digest", "DATALENGTH(token_digest) = 32");
             table.HasCheckConstraint("ck_enrollment_tokens_expiry", "expires_at_utc > created_at_utc");
             table.HasCheckConstraint(
                 "ck_enrollment_tokens_failed_attempts",
                 $"failed_attempt_count >= 0 AND failed_attempt_count <= {EnrollmentToken.MaximumFailedAttempts}");
             table.HasCheckConstraint(
                 "ck_enrollment_tokens_consumption",
-                "(consumed_at_utc IS NULL) = (consumed_by_device_id IS NULL)");
+                "(consumed_at_utc IS NULL AND consumed_by_device_id IS NULL) OR " +
+                "(consumed_at_utc IS NOT NULL AND consumed_by_device_id IS NOT NULL)");
             table.HasCheckConstraint(
                 "ck_enrollment_tokens_terminal_state",
                 "NOT (consumed_at_utc IS NOT NULL AND revoked_at_utc IS NOT NULL)");
@@ -82,11 +83,11 @@ public sealed partial class DisplayControlDbContext
         var entity = modelBuilder.Entity<DeviceCertificate>();
         entity.ToTable("device_certificates", table =>
         {
-            table.HasCheckConstraint("ck_device_certificates_thumbprint", "octet_length(thumbprint_sha256) = 32");
-            table.HasCheckConstraint("ck_device_certificates_spki", "octet_length(subject_public_key_info_sha256) = 32");
+            table.HasCheckConstraint("ck_device_certificates_thumbprint", "DATALENGTH(thumbprint_sha256) = 32");
+            table.HasCheckConstraint("ck_device_certificates_spki", "DATALENGTH(subject_public_key_info_sha256) = 32");
             table.HasCheckConstraint(
                 "ck_device_certificates_der",
-                "certificate_der IS NULL OR (octet_length(certificate_der) >= 100 AND octet_length(certificate_der) <= 16384)");
+                "certificate_der IS NULL OR (DATALENGTH(certificate_der) >= 100 AND DATALENGTH(certificate_der) <= 16384)");
             table.HasCheckConstraint("ck_device_certificates_validity", "not_after_utc > not_before_utc");
             table.HasCheckConstraint(
                 "ck_device_certificates_issuance",
@@ -144,7 +145,7 @@ public sealed partial class DisplayControlDbContext
         entity.Property(value => value.MacAddressNormalized).HasColumnName("mac_address_normalized").HasMaxLength(12);
         entity.Property(value => value.LocalAddressesJson)
             .HasColumnName("local_addresses_json")
-            .HasColumnType("jsonb")
+            .HasColumnType("nvarchar(max)")
             .IsRequired();
         entity.Property(value => value.ObservedAtUtc).HasColumnName("observed_at_utc").IsRequired();
         entity.HasOne<Device>()
@@ -172,11 +173,11 @@ public sealed partial class DisplayControlDbContext
         entity.Property(value => value.BootId).HasColumnName("boot_id").IsRequired();
         entity.Property(value => value.Sequence).HasColumnName("sequence").IsRequired();
         entity.Property(value => value.RequestSha256).HasColumnName("request_sha256").IsRequired();
-        entity.Property(value => value.ResponseJson).HasColumnName("response_json").HasColumnType("jsonb");
+        entity.Property(value => value.ResponseJson).HasColumnName("response_json").HasColumnType("nvarchar(max)");
         entity.Property(value => value.ReportedSentAtUtc).HasColumnName("reported_sent_at_utc");
         entity.Property(value => value.ReceivedAtUtc).HasColumnName("received_at_utc").IsRequired();
         entity.Property(value => value.ServerObservedIp).HasColumnName("server_observed_ip").HasMaxLength(64).IsRequired();
-        entity.Property(value => value.InventoryJson).HasColumnName("inventory_json").HasColumnType("jsonb").IsRequired();
+        entity.Property(value => value.InventoryJson).HasColumnName("inventory_json").HasColumnType("nvarchar(max)").IsRequired();
         entity.Property(value => value.AppliedDesiredStateVersion).HasColumnName("applied_desired_state_version");
         entity.Property(value => value.PlayerStateCode).HasColumnName("player_state_code").HasMaxLength(64).IsRequired();
         entity.Property(value => value.FreeDiskBytes).HasColumnName("free_disk_bytes");
@@ -208,7 +209,7 @@ public sealed partial class DisplayControlDbContext
         entity.Property(value => value.DesiredStateVersion).HasColumnName("desired_state_version");
         entity.Property(value => value.EventType).HasColumnName("event_type").HasMaxLength(64).IsRequired();
         entity.Property(value => value.ResultCode).HasColumnName("result_code").HasMaxLength(64).IsRequired();
-        entity.Property(value => value.SafeDetailsJson).HasColumnName("safe_details_json").HasColumnType("jsonb").IsRequired();
+        entity.Property(value => value.SafeDetailsJson).HasColumnName("safe_details_json").HasColumnType("nvarchar(max)").IsRequired();
         entity.Property(value => value.ReportedAtUtc).HasColumnName("reported_at_utc");
         entity.Property(value => value.ReceivedAtUtc).HasColumnName("received_at_utc").IsRequired();
         entity.Property(value => value.CorrelationId).HasColumnName("correlation_id").IsRequired();

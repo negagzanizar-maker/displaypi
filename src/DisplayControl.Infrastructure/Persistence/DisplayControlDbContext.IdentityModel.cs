@@ -155,11 +155,12 @@ public sealed partial class DisplayControlDbContext
         var entity = modelBuilder.Entity<Invitation>();
         entity.ToTable("invitations", table =>
         {
-            table.HasCheckConstraint("ck_invitations_digest", "octet_length(token_digest) = 32");
+            table.HasCheckConstraint("ck_invitations_digest", "DATALENGTH(token_digest) = 32");
             table.HasCheckConstraint("ck_invitations_expiry", "expires_at_utc > created_at_utc");
             table.HasCheckConstraint(
                 "ck_invitations_consumption",
-                "(consumed_at_utc IS NULL) = (consumed_by_user_id IS NULL)");
+                "(consumed_at_utc IS NULL AND consumed_by_user_id IS NULL) OR " +
+                "(consumed_at_utc IS NOT NULL AND consumed_by_user_id IS NOT NULL)");
             table.HasCheckConstraint(
                 "ck_invitations_terminal_state",
                 "NOT (consumed_at_utc IS NOT NULL AND revoked_at_utc IS NOT NULL)");
@@ -202,21 +203,21 @@ public sealed partial class DisplayControlDbContext
         var entity = modelBuilder.Entity<UserSession>();
         entity.ToTable("user_sessions", table =>
         {
-            table.HasCheckConstraint("ck_user_sessions_key_digest", "octet_length(session_key_digest) = 32");
-            table.HasCheckConstraint("ck_user_sessions_stamp_digest", "octet_length(security_stamp_digest) = 32");
+            table.HasCheckConstraint("ck_user_sessions_key_digest", "DATALENGTH(session_key_digest) = 32");
+            table.HasCheckConstraint("ck_user_sessions_stamp_digest", "DATALENGTH(security_stamp_digest) = 32");
             table.HasCheckConstraint(
                 "ck_user_sessions_user_agent_digest",
-                "user_agent_digest IS NULL OR octet_length(user_agent_digest) = 32");
+                "user_agent_digest IS NULL OR DATALENGTH(user_agent_digest) = 32");
             table.HasCheckConstraint(
                 "ck_user_sessions_source_address_digest",
-                "source_address_digest IS NULL OR octet_length(source_address_digest) = 32");
+                "source_address_digest IS NULL OR DATALENGTH(source_address_digest) = 32");
             table.HasCheckConstraint(
                 "ck_user_sessions_expiry",
                 "idle_expires_at_utc > created_at_utc AND absolute_expires_at_utc >= idle_expires_at_utc");
             table.HasCheckConstraint(
                 "ck_user_sessions_mfa",
-                "(mfa_satisfied = FALSE AND mfa_satisfied_at_utc IS NULL) OR " +
-                "(mfa_satisfied = TRUE AND mfa_satisfied_at_utc IS NOT NULL)");
+                "(mfa_satisfied = 0 AND mfa_satisfied_at_utc IS NULL) OR " +
+                "(mfa_satisfied = 1 AND mfa_satisfied_at_utc IS NOT NULL)");
         });
         entity.HasKey(value => value.Id).HasName("pk_user_sessions");
         entity.Property(value => value.Id).HasColumnName("id");
@@ -255,7 +256,7 @@ public sealed partial class DisplayControlDbContext
         var entity = modelBuilder.Entity<UserMfaSecret>();
         entity.ToTable("user_mfa_secrets", table =>
         {
-            table.HasCheckConstraint("ck_user_mfa_secrets_payload", "octet_length(protected_secret) > 0");
+            table.HasCheckConstraint("ck_user_mfa_secrets_payload", "DATALENGTH(protected_secret) > 0");
             table.HasCheckConstraint(
                 "ck_user_mfa_secrets_last_step",
                 "last_accepted_time_step IS NULL OR last_accepted_time_step >= 0");
@@ -280,7 +281,7 @@ public sealed partial class DisplayControlDbContext
     {
         var entity = modelBuilder.Entity<UserRecoveryCode>();
         entity.ToTable("user_recovery_codes", table =>
-            table.HasCheckConstraint("ck_user_recovery_codes_digest", "octet_length(code_digest) = 32"));
+            table.HasCheckConstraint("ck_user_recovery_codes_digest", "DATALENGTH(code_digest) = 32"));
         entity.HasKey(value => value.Id).HasName("pk_user_recovery_codes");
         entity.Property(value => value.Id).HasColumnName("id");
         entity.Property(value => value.UserId).HasColumnName("user_id").IsRequired();
@@ -305,7 +306,7 @@ public sealed partial class DisplayControlDbContext
         {
             table.HasCheckConstraint(
                 "ck_identity_notifications_payload",
-                $"octet_length(protected_payload) > 0 AND octet_length(protected_payload) <= {IdentityNotification.MaximumProtectedPayloadBytes}");
+                $"DATALENGTH(protected_payload) > 0 AND DATALENGTH(protected_payload) <= {IdentityNotification.MaximumProtectedPayloadBytes}");
             table.HasCheckConstraint("ck_identity_notifications_attempts", "attempt_count >= 0");
         });
         entity.HasKey(value => value.Id).HasName("pk_identity_notifications");

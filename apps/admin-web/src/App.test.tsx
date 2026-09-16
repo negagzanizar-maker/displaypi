@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
-const anonymousSession = { authenticated: false, authenticationStage: null, csrfToken: 'csrf-test-token', userId: null, email: null, displayName: null, tenantId: null, tenantRole: null, mfaSatisfied: false }
+const anonymousSession = { authenticated: false, authenticationStage: null, csrfToken: 'csrf-test-token', userId: null, email: null, displayName: null, tenantId: null, tenantRole: null, mfaSatisfied: false, mfaRequired: true }
 
 describe('administration authentication shell', () => {
   beforeEach(() => {
@@ -20,10 +20,12 @@ describe('administration authentication shell', () => {
   })
 
   it('sends the in-memory CSRF token with sign-in and renders the verified dashboard', async () => {
-    const authenticatedSession = { ...anonymousSession, authenticated: true, authenticationStage: 'full', csrfToken: 'authenticated-csrf', userId: '11111111-1111-1111-1111-111111111111', email: 'admin@example.test', displayName: 'Admin Test', tenantId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', tenantRole: 'TenantAdmin', mfaSatisfied: true }
+    const authenticatedSession = { ...anonymousSession, authenticated: true, authenticationStage: 'full', csrfToken: 'authenticated-csrf', userId: '11111111-1111-1111-1111-111111111111', email: 'admin@example.test', displayName: 'Admin Test', tenantId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', tenantRole: 'TenantAdmin', mfaSatisfied: false, mfaRequired: false }
     const deviceInventory = [{
       id: '22222222-2222-2222-2222-222222222222', displayName: 'Écran accueil', state: 'active', health: 'online',
       hostname: 'pi-lobby', serialNumber: '10000000ABCD1234', licenseState: 'active', licenseExpiresAtUtc: '2026-09-15T12:00:00Z',
+      osDescription: 'Debian GNU/Linux 13', architecture: 'arm64', agentVersion: '0.1.15', playerVersion: '0.1.15',
+      diskCapacityBytes: 34359738368, freeDiskBytes: 17179869184, serverObservedIp: '192.168.1.44',
       networkInterfaces: [{ interfaceName: 'wlan0', macAddress: 'B827EB123456', localAddresses: ['192.168.1.44'], observedAtUtc: '2026-08-16T12:00:00Z' }],
     }]
     const fetchMock = vi.fn()
@@ -44,13 +46,24 @@ describe('administration authentication shell', () => {
     await user.type(screen.getByLabelText('Mot de passe'), 'StrongPassword123')
     await user.click(screen.getByRole('button', { name: 'Se connecter' }))
     expect(await screen.findByText(/bonjour admin test/i)).toBeInTheDocument()
+    expect(screen.getByText('Session active')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Sécurité du compte' })).not.toBeInTheDocument()
     const signInOptions = fetchMock.mock.calls[1]?.[1] as RequestInit
     expect((signInOptions.headers as Record<string, string>)['X-CSRF-TOKEN']).toBe('csrf-test-token')
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(10))
-    expect(screen.getByRole('heading', { name: 'Appareils Raspberry Pi' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'État du parc' })).toBeInTheDocument()
+    await user.click(screen.getByRole('link', { name: 'Devices' }))
+    expect(await screen.findByRole('heading', { name: 'Appareils Raspberry Pi' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Écran accueil/ }))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(screen.getByText('pi-lobby')).toBeInTheDocument()
     expect(screen.getByText('10000000ABCD1234')).toBeInTheDocument()
-    expect(screen.getByText('192.168.1.44')).toBeInTheDocument()
+    expect(screen.getAllByText('192.168.1.44')).toHaveLength(2)
+    expect(screen.getByText('Debian GNU/Linux 13')).toBeInTheDocument()
+    expect(screen.getByText('arm64')).toBeInTheDocument()
+    expect(screen.getAllByText('0.1.15')).toHaveLength(2)
+    expect(screen.getByText('32 Go')).toBeInTheDocument()
+    expect(screen.getByText('16 Go')).toBeInTheDocument()
     expect(screen.getByText('B8:27:EB:12:34:56')).toBeInTheDocument()
   })
 

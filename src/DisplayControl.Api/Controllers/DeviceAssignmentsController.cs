@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using System.Text.Json;
 using DisplayControl.Api.Pagination;
+using DisplayControl.Api.Realtime;
 using DisplayControl.Api.Scheduling;
 using DisplayControl.Api.Security;
 using DisplayControl.Application.Content;
@@ -20,6 +21,7 @@ namespace DisplayControl.Api.Controllers;
 public sealed class DeviceAssignmentsController(
     DisplayControlDbContext dbContext,
     DesiredStateCompilationService compilationService,
+    DeviceStateChangeNotifications notifications,
     TimeProvider timeProvider) : ControllerBase
 {
     [HttpGet]
@@ -85,10 +87,10 @@ public sealed class DeviceAssignmentsController(
             return InvalidSchedule(exception.Message);
         }
 
-        var samePriority = await dbContext.DeviceAssignments.AsNoTracking()
+        var existingAssignments = await dbContext.DeviceAssignments.AsNoTracking()
             .Where(value => value.DeviceId == deviceId && value.IsEnabled && value.Priority == request.Priority)
             .ToListAsync(cancellationToken);
-        if (samePriority.Any(value => AssignmentSchedule.Overlaps(
+        if (!request.OverrideEqualPriority && existingAssignments.Any(value => AssignmentSchedule.Overlaps(
                 value.StartsAtUtc,
                 value.EndsAtUtc,
                 request.StartsAtUtc,
@@ -96,7 +98,7 @@ public sealed class DeviceAssignmentsController(
         {
             return ConflictProblem(
                 "assignment_priority_collision",
-                "An overlapping direct assignment already uses this priority for the device.");
+                "The requested schedule overlaps an equal-priority device assignment.");
         }
 
         var actorId = CurrentUserId();
@@ -138,10 +140,12 @@ public sealed class DeviceAssignmentsController(
                 desiredStateVersion = desiredState.Version,
                 request.StartsAtUtc,
                 request.EndsAtUtc,
-                request.Priority
+                request.Priority,
+                request.OverrideEqualPriority
             }),
             nowUtc));
         await dbContext.SaveChangesAsync(cancellationToken);
+        notifications.Enqueue(tenantId, deviceId);
 
         return CreatedAtAction(
             nameof(List),
@@ -198,7 +202,8 @@ public sealed record PublishDeviceAssignmentRequest(
     [param: Range(-1000, 1000)] int Priority = 0,
     DateTimeOffset? StartsAtUtc = null,
     DateTimeOffset? EndsAtUtc = null,
-    [param: Required, StringLength(80, MinimumLength = 1)] string PresentationTimeZone = "UTC");
+    [param: Required, StringLength(80, MinimumLength = 1)] string PresentationTimeZone = "UTC",
+    bool OverrideEqualPriority = false);
 
 public sealed record DeviceAssignmentResponse(
     Guid Id,

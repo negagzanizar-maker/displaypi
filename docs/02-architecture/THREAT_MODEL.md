@@ -33,7 +33,7 @@ The model is reviewed whenever a trust boundary, privileged role, authentication
 | Restricted secrets | Password hashes, MFA seeds/recovery, sessions, reset/invitation/enrollment tokens, Data Protection/DB/storage credentials, CA/lease/update keys, device private keys | Confidentiality, integrity, least privilege, rotation/recovery |
 | Confidential tenant data | Users/emails, media/text, playlists, assignments, device identifiers/history, licences, audit, backups | Tenant isolation, authorized access, retention, encryption |
 | Integrity-critical state | Roles, tenant context, certificate bindings, licence state, leases, trusted time, manifests/hashes, audit/update metadata | Strong authentication, authorization, signing/versioning, tamper detection |
-| Availability-critical services | API, PostgreSQL, storage/scanner, signing, Pi agent/player, email | Limits, monitoring, recovery, safe offline behavior |
+| Availability-critical services | API, SQL Server, storage/scanner, signing, Pi agent/player, email | Limits, monitoring, recovery, safe offline behavior |
 | Public | Login assets and explicitly published documentation | Integrity and safe caching |
 
 No restricted secret or human authentication token may be exposed to React, Chromium, URLs, analytics, or logs.
@@ -43,7 +43,7 @@ No restricted secret or human authentication token may be exposed to React, Chro
 1. Browser -> public edge -> human API.
 2. Unenrolled Pi -> server-authenticated enrollment endpoint.
 3. Enrolled Pi agent -> Internet -> mTLS device endpoint.
-4. ASP.NET runtime -> PostgreSQL runtime role/RLS.
+4. ASP.NET runtime -> restricted SQL Server login/RLS security policies.
 5. API/worker -> quarantine, scanner/parser and private object storage.
 6. Agent credential/authorization process -> loopback local player -> Chromium.
 7. Source/CI -> registries -> signed release/deployment/update.

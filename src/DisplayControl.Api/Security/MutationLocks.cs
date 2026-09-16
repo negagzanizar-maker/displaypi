@@ -16,6 +16,6 @@ internal static class MutationLocks
         if (db.Database.CurrentTransaction is null)
             throw new InvalidOperationException("Mutation locks require an active transaction.");
         return db.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT pg_advisory_xact_lock(hashtextextended({key}, 0))", ct);
+            $"EXEC sys.sp_getapplock @Resource={key}, @LockMode=N'Exclusive', @LockOwner=N'Transaction', @LockTimeout=-1", ct);
     }
 }

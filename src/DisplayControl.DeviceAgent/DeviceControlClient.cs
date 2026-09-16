@@ -7,6 +7,11 @@ using Microsoft.Extensions.Options;
 
 namespace DisplayControl.DeviceAgent;
 
+public interface IDeviceSynchronizationClient
+{
+    public Task SynchronizeOnceAsync(CancellationToken cancellationToken);
+}
+
 public sealed class DeviceControlClient(
     HttpClient enrollmentClient,
     AgentStateStore stateStore,
@@ -15,7 +20,7 @@ public sealed class DeviceControlClient(
     ContentCacheStore contentCache,
     IOptions<AgentRuntimeOptions> options,
     TimeProvider timeProvider,
-    ILogger<DeviceControlClient> logger)
+    ILogger<DeviceControlClient> logger) : IDeviceSynchronizationClient
 {
     private readonly AgentRuntimeOptions _options = options.Value;
     private readonly object _clockGate = new();
@@ -90,7 +95,7 @@ public sealed class DeviceControlClient(
     {
         using var currentPrivateKey = await stateStore.LoadOrCreatePrivateKeyAsync(cancellationToken);
         using var publicCertificate = X509Certificate2.CreateFromPem(state.CertificatePem);
-        using var clientCertificate = CreateTlsClientCertificate(publicCertificate, currentPrivateKey);
+        using var clientCertificate = DeviceTlsCertificate.Create(publicCertificate, currentPrivateKey);
         using var handler = new HttpClientHandler
         {
             CheckCertificateRevocationList = _options.CheckServerCertificateRevocation
@@ -270,7 +275,7 @@ public sealed class DeviceControlClient(
         var inventory = await inventoryCollector.CollectAsync(cancellationToken);
         using var privateKey = await stateStore.LoadOrCreatePrivateKeyAsync(cancellationToken);
         using var publicCertificate = X509Certificate2.CreateFromPem(state.CertificatePem);
-        using var clientCertificate = CreateTlsClientCertificate(publicCertificate, privateKey);
+        using var clientCertificate = DeviceTlsCertificate.Create(publicCertificate, privateKey);
         using var handler = new HttpClientHandler
         {
             CheckCertificateRevocationList = _options.CheckServerCertificateRevocation
@@ -282,6 +287,7 @@ public sealed class DeviceControlClient(
             Timeout = TimeSpan.FromSeconds(30)
         };
         var sequence = _pendingHeartbeat?.Sequence ?? checked(_heartbeatSequence + 1);
+        var playerSnapshot = playerState.Snapshot();
         var heartbeatRequest = _pendingHeartbeat ?? new HeartbeatRequestContract(
             _bootId,
             sequence,
@@ -294,8 +300,9 @@ public sealed class DeviceControlClient(
             inventory.DiskCapacityBytes,
             inventory.FreeDiskBytes,
             state.AppliedDesiredStateVersion,
-            playerState.Snapshot().Status,
-            playerState.Snapshot().SafeReasonCode,
+            playerSnapshot.Status,
+            playerSnapshot.SafeReasonCode,
+            playerSnapshot.CurrentContentVersionId,
             inventory.NetworkInterfaces);
         _pendingHeartbeat = heartbeatRequest;
         AgentLog.HeartbeatStarted(logger, sequence);
@@ -645,27 +652,6 @@ public sealed class DeviceControlClient(
         }
     }
 
-    private static X509Certificate2 CreateTlsClientCertificate(X509Certificate2 certificate, ECDsa privateKey)
-    {
-        var combined = certificate.CopyWithPrivateKey(privateKey);
-        if (!OperatingSystem.IsWindows())
-        {
-            return combined;
-        }
-
-        try
-        {
-            return X509CertificateLoader.LoadPkcs12(
-                combined.Export(X509ContentType.Pkcs12),
-                password: null,
-                X509KeyStorageFlags.Exportable);
-        }
-        finally
-        {
-            combined.Dispose();
-        }
-    }
-
     private bool TryGetTrustedTime(out DateTimeOffset trustedNowUtc)
     {
         lock (_clockGate)
@@ -720,6 +706,7 @@ internal sealed record HeartbeatRequestContract(
     long? AppliedDesiredStateVersion,
     string PlayerStateCode,
     string? LastErrorCode,
+    Guid? CurrentContentVersionId,
     IReadOnlyList<DeviceNetworkSnapshot> NetworkInterfaces);
 
 internal sealed record HeartbeatResponseContract(

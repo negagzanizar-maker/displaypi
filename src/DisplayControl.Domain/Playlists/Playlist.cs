@@ -46,6 +46,31 @@ public sealed class Playlist : TenantOwnedEntity
 
     public Guid ConcurrencyToken { get; private set; }
 
+    public void RecordRevision(DateTimeOffset updatedAtUtc)
+    {
+        EnsureUtc(updatedAtUtc, nameof(updatedAtUtc));
+        if (ArchivedAtUtc.HasValue)
+        {
+            throw new InvalidOperationException("An archived playlist cannot be revised.");
+        }
+
+        UpdatedAtUtc = updatedAtUtc;
+        ConcurrencyToken = Guid.NewGuid();
+    }
+
+    public void Archive(DateTimeOffset archivedAtUtc)
+    {
+        EnsureUtc(archivedAtUtc, nameof(archivedAtUtc));
+        if (ArchivedAtUtc.HasValue)
+        {
+            throw new InvalidOperationException("The playlist is already archived.");
+        }
+
+        ArchivedAtUtc = archivedAtUtc;
+        UpdatedAtUtc = archivedAtUtc;
+        ConcurrencyToken = Guid.NewGuid();
+    }
+
     private static string Normalize(string value, int maximumLength, string parameterName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value, parameterName);

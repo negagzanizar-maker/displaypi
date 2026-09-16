@@ -4,11 +4,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace DisplayControl.Api.Scheduling;
 
-public sealed class DesiredStateResolver(DisplayControlDbContext dbContext, ILogger<DesiredStateResolver>? logger = null)
+public sealed class DesiredStateResolver(DisplayControlDbContext dbContext)
 {
-    private static readonly Action<ILogger, string, Guid, Exception?> LogAmbiguous = LoggerMessage.Define<string, Guid>(
-        LogLevel.Error, new EventId(4101, "AmbiguousAssignment"),
-        "Ambiguous active {TargetClass} assignments for device {DeviceId}; content authorization withheld.");
     public async Task<DesiredState?> ResolveAsync(
         Guid deviceId,
         DateTimeOffset nowUtc,
@@ -26,15 +23,10 @@ public sealed class DesiredStateResolver(DisplayControlDbContext dbContext, ILog
                 assignment.IsEnabled &&
                 (assignment.StartsAtUtc == null || assignment.StartsAtUtc <= nowUtc) &&
                 (assignment.EndsAtUtc == null || assignment.EndsAtUtc > nowUtc)
-            orderby assignment.Priority descending, assignment.PublishedAtUtc descending, assignment.Id
-            select new DesiredStateCandidate(state, assignment.Priority))
-            .Take(2)
+            orderby assignment.PublishedAtUtc descending, state.Version descending, assignment.Priority descending
+            select new DesiredStateCandidate(state, assignment.PublishedAtUtc, assignment.Priority))
+            .Take(1)
             .ToListAsync(cancellationToken);
-        var directWinner = SelectUnambiguous(direct, "direct-device");
-        if (direct.Count > 0)
-        {
-            return directWinner;
-        }
 
         var group = await (
             from state in dbContext.DesiredStates.AsNoTracking()
@@ -50,25 +42,20 @@ public sealed class DesiredStateResolver(DisplayControlDbContext dbContext, ILog
                 assignment.IsEnabled &&
                 (assignment.StartsAtUtc == null || assignment.StartsAtUtc <= nowUtc) &&
                 (assignment.EndsAtUtc == null || assignment.EndsAtUtc > nowUtc)
-            orderby assignment.Priority descending, assignment.PublishedAtUtc descending, assignment.Id
-            select new DesiredStateCandidate(state, assignment.Priority))
-            .Take(2)
+            orderby assignment.PublishedAtUtc descending, state.Version descending, assignment.Priority descending
+            select new DesiredStateCandidate(state, assignment.PublishedAtUtc, assignment.Priority))
+            .Take(1)
             .ToListAsync(cancellationToken);
-        return SelectUnambiguous(group, "group");
+        return direct.Concat(group)
+            .OrderByDescending(value => value.PublishedAtUtc)
+            .ThenByDescending(value => value.State.Version)
+            .ThenByDescending(value => value.Priority)
+            .Select(value => value.State)
+            .FirstOrDefault();
     }
 
-    private DesiredState? SelectUnambiguous(
-        IReadOnlyList<DesiredStateCandidate> candidates,
-        string targetClass)
-    {
-        if (candidates.Count > 1 && candidates[0].Priority == candidates[1].Priority)
-        {
-            if (logger is not null) LogAmbiguous(logger, targetClass, candidates[0].State.DeviceId, null);
-            return null;
-        }
-
-        return candidates.Count == 0 ? null : candidates[0].State;
-    }
-
-    private sealed record DesiredStateCandidate(DesiredState State, int Priority);
+    private sealed record DesiredStateCandidate(
+        DesiredState State,
+        DateTimeOffset PublishedAtUtc,
+        int Priority);
 }

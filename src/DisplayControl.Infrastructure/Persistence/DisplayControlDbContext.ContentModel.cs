@@ -57,7 +57,7 @@ public sealed partial class DisplayControlDbContext
         version.ToTable("content_versions", table =>
         {
             table.HasCheckConstraint("ck_content_versions_byte_length", "byte_length >= 0");
-            table.HasCheckConstraint("ck_content_versions_sha256", "octet_length(sha256) = 32");
+            table.HasCheckConstraint("ck_content_versions_sha256", "DATALENGTH(sha256) = 32");
             table.HasCheckConstraint("ck_content_versions_version", "version_number > 0");
         });
         ConfigureTenantOwned(version, "content_versions");
@@ -68,7 +68,7 @@ public sealed partial class DisplayControlDbContext
         version.Property(value => value.Sha256).HasColumnName("sha256").IsRequired();
         version.Property(value => value.DetectedMimeType).HasColumnName("detected_mime_type").HasMaxLength(128).IsRequired();
         version.Property(value => value.OriginalDisplayFileName).HasColumnName("original_display_file_name").HasMaxLength(255).IsRequired();
-        version.Property(value => value.MediaMetadataJson).HasColumnName("media_metadata_json").HasColumnType("jsonb").IsRequired();
+        version.Property(value => value.MediaMetadataJson).HasColumnName("media_metadata_json").HasColumnType("nvarchar(max)").IsRequired();
         version.Property(value => value.ScanState).HasColumnName("scan_state").HasMaxLength(32).IsRequired();
         version.Property(value => value.ScanEngineVersion).HasColumnName("scan_engine_version").HasMaxLength(128);
         version.Property(value => value.RejectionCode).HasColumnName("rejection_code").HasMaxLength(64);
@@ -144,7 +144,7 @@ public sealed partial class DisplayControlDbContext
         item.Property(value => value.Position).HasColumnName("position").IsRequired();
         item.Property(value => value.DurationMilliseconds).HasColumnName("duration_milliseconds");
         item.Property(value => value.LoopVideo).HasColumnName("loop_video").IsRequired();
-        item.Property(value => value.PresentationJson).HasColumnName("presentation_json").HasColumnType("jsonb").IsRequired();
+        item.Property(value => value.PresentationJson).HasColumnName("presentation_json").HasColumnType("nvarchar(max)").IsRequired();
         item.HasOne<PlaylistVersion>()
             .WithMany()
             .HasForeignKey(value => new { value.TenantId, value.PlaylistVersionId })
@@ -259,7 +259,7 @@ public sealed partial class DisplayControlDbContext
         state.ToTable("desired_states", table =>
         {
             table.HasCheckConstraint("ck_desired_states_version", "version > 0");
-            table.HasCheckConstraint("ck_desired_states_sha256", "octet_length(manifest_sha256) = 32");
+            table.HasCheckConstraint("ck_desired_states_sha256", "DATALENGTH(manifest_sha256) = 32");
             table.HasCheckConstraint(
                 "ck_desired_states_source",
                 "(source_device_assignment_id IS NOT NULL AND source_group_assignment_id IS NULL) OR " +
@@ -313,7 +313,7 @@ public sealed partial class DisplayControlDbContext
         {
             table.HasCheckConstraint("ck_desired_state_assets_position", "position >= 0");
             table.HasCheckConstraint("ck_desired_state_assets_byte_length", "byte_length >= 0");
-            table.HasCheckConstraint("ck_desired_state_assets_sha256", "octet_length(sha256) = 32");
+            table.HasCheckConstraint("ck_desired_state_assets_sha256", "DATALENGTH(sha256) = 32");
             table.HasCheckConstraint(
                 "ck_desired_state_assets_duration",
                 "duration_milliseconds IS NULL OR duration_milliseconds > 0");
@@ -327,7 +327,7 @@ public sealed partial class DisplayControlDbContext
         asset.Property(value => value.Sha256).HasColumnName("sha256").IsRequired();
         asset.Property(value => value.DurationMilliseconds).HasColumnName("duration_milliseconds");
         asset.Property(value => value.LoopVideo).HasColumnName("loop_video").IsRequired();
-        asset.Property(value => value.PlaybackJson).HasColumnName("playback_json").HasColumnType("jsonb").IsRequired();
+        asset.Property(value => value.PlaybackJson).HasColumnName("playback_json").HasColumnType("nvarchar(max)").IsRequired();
         asset.HasOne<DesiredState>()
             .WithMany()
             .HasForeignKey(value => new { value.TenantId, value.DesiredStateId })
@@ -356,8 +356,8 @@ public sealed partial class DisplayControlDbContext
         entity.Property(value => value.ActorType).HasColumnName("actor_type").HasMaxLength(32).IsRequired();
         entity.Property(value => value.ActorId).HasColumnName("actor_id");
         entity.Property(value => value.Reason).HasColumnName("reason").HasMaxLength(1000).IsRequired();
-        entity.Property(value => value.BeforeJson).HasColumnName("before_json").HasColumnType("jsonb").IsRequired();
-        entity.Property(value => value.AfterJson).HasColumnName("after_json").HasColumnType("jsonb").IsRequired();
+        entity.Property(value => value.BeforeJson).HasColumnName("before_json").HasColumnType("nvarchar(max)").IsRequired();
+        entity.Property(value => value.AfterJson).HasColumnName("after_json").HasColumnType("nvarchar(max)").IsRequired();
         entity.Property(value => value.SourceDeviceId).HasColumnName("source_device_id");
         entity.Property(value => value.DestinationDeviceId).HasColumnName("destination_device_id");
         entity.Property(value => value.OccurredAtUtc).HasColumnName("occurred_at_utc").IsRequired();

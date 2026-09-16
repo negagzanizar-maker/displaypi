@@ -8,7 +8,7 @@ The kiosk launcher detects an available Wayland socket and otherwise uses X11. T
 
 ## Release artifact
 
-For a laptop-and-Pi test on the same Wi-Fi, use the complete [quick field-test runbook](FIELD_TEST_TOMORROW.md). It builds the archive automatically and provisions private-LAN HTTPS trust.
+For a laptop-and-Pi test on the same Wi-Fi, build the bundle with `scripts/Build-PiFieldTestBundle.ps1` and provision private-LAN HTTPS trust with `scripts/New-FieldTestEnvironment.ps1`.
 
 Build the player first so it is embedded into the agent publication, then create an immutable archive:
 
@@ -46,6 +46,19 @@ For a Raspberry Pi OS desktop field test, add `--kiosk-user "$(whoami)"`. For a 
 
 The installer always creates a non-login `display-control-agent` account and, unless a graphical user is supplied, a separate `display-control-kiosk` account. It creates owner-only state directories, immutable root-owned releases, hardened service units, and an atomic `current` symlink. The agent reads the copied one-time enrollment file and deletes it only after the certificate and pinned licence-verification key have been validated and persisted.
 
+For an already-enrolled Pi, install a new immutable version without creating or copying another enrollment secret. The installer permits omission of `--enrollment-code-file` only when the protected `agent-state.json` and device private key already exist:
+
+```bash
+sudo deploy/pi/install.sh \
+  --artifact ./display-control-pi-linux-arm64-0.1.7-realtime.tar.gz \
+  --sha256 '<trusted 64-character digest>' \
+  --version '0.1.7-realtime' \
+  --server 'https://control.example.com' \
+  --kiosk-user "$(whoami)"
+```
+
+Add `--server-ca ./field-test-server-ca.crt` when updating a private-CA field-test installation.
+
 ## Validation
 
 Installation explicitly restarts the agent, including when its service was already running. Each immutable release contains a `release-version` marker. Activation waits for HTTP 200 from the health endpoint with the expected `releaseVersion`, checking up to 45 times with two-second pauses and a two-second request timeout. This verifies that the new process is serving requests and its worker has completed a cycle. It does not certify successful content playback or cloud reachability: an authorized offline cycle also counts as worker progress.
@@ -70,9 +83,11 @@ The browser reports playback through same-origin `POST /player/v1/playback-repor
 
 An unchanged desired-state identity and manifest hash renew authorization without resetting playback or rehashing all cached assets. While replacement content downloads, the old manifest can continue only until its original authorization expires. A synchronization attempt is bounded to 30 seconds, including response-body reads; partial downloads can resume on the next cycle.
 
+After enrollment, the agent maintains an outbound mTLS-authenticated server-sent event stream at `GET /device/v1/state-changes`. Its messages contain no content or licence authority: they only wake the existing heartbeat, signed-lease, manifest-validation, and cache pipeline. Notifications are coalesced while synchronization is active, and the normal heartbeat remains enabled for reconnects, dropped events, backend restarts, and offline devices. The local kiosk checks the agent's authoritative player state every second, so a completed synchronization switches presentation without refreshing Chromium.
+
 The authenticated HTTPS heartbeat can supply a `LicenseVerificationKeys` trust set containing at most four ES256/P-256 public keys. The agent rejects duplicate identifiers, invalid curves, and identifiers that do not match the first 16 bytes of SHA-256 over SPKI. It selects the key named by the lease, validates the lease, and persists that key with the authorized state. A legacy response without this field retains the existing pin. Offline operation cannot change trust. On the server, configure retiring public keys through `Security:LicenseSigningKey:VerificationPublicKeyPaths` alongside the current signing key; retain old verification keys through the outstanding lease window. The authenticated server TLS connection is the trust boundary for this rotation.
 
-Workstation unit tests cover playback continuity, authorization expiry, health freshness, report validation, and malformed rotation trust sets. Installer syntax has been checked, but service activation, rollback, and the hardware acceptance scenarios above still require execution on the target Pi.
+Workstation unit tests cover playback continuity, authorization expiry, real-time wake-up coalescing, health freshness, report validation, and malformed rotation trust sets. Installer syntax has been checked, but service activation, rollback, and the hardware acceptance scenarios above still require execution on the target Pi.
 
 ## Remote-access baseline
 

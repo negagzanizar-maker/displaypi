@@ -53,10 +53,13 @@ public sealed class PlaybackContinuityTests
         Assert.False(store.ReportPlayback(report with { ErrorCode = "arbitrary" }));
         Assert.True(store.ReportPlayback(report));
         Assert.Equal("media_error", store.Snapshot().SafeReasonCode);
+        Assert.Equal(content, store.Snapshot().CurrentContentVersionId);
         Assert.True(store.ReportPlayback(report with { Status = "playing", ErrorCode = null }));
         Assert.Null(store.Snapshot().SafeReasonCode);
+        Assert.Equal(content, store.Snapshot().CurrentContentVersionId);
         clock.Advance(TimeSpan.FromSeconds(5));
         Assert.False(store.ReportPlayback(report));
+        Assert.Null(store.Snapshot().CurrentContentVersionId);
     }
 
     [Fact]

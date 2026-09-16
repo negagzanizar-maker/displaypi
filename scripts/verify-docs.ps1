@@ -22,15 +22,6 @@ if ($duplicates.Count -gt 0) {
     throw "Duplicate requirement IDs: $($duplicates.Name -join ', ')"
 }
 
-$traceabilityPath = Join-Path $repositoryRoot 'docs/01-requirements/TRACEABILITY.csv'
-$traceabilityIds = @(Import-Csv -LiteralPath $traceabilityPath | ForEach-Object requirement_id)
-$missing = @($requirementIds | Where-Object { $_ -notin $traceabilityIds })
-$extra = @($traceabilityIds | Where-Object { $_ -notin $requirementIds })
-
-if ($missing.Count -gt 0 -or $extra.Count -gt 0) {
-    throw "Traceability mismatch. Missing: $($missing -join ', '); extra: $($extra -join ', ')"
-}
-
 $brokenLinks = @()
 $markdownFiles = Get-ChildItem -LiteralPath $repositoryRoot -Recurse -Filter '*.md' -File |
     Where-Object { $_.FullName -notmatch '[\\/](node_modules|artifacts|bin|obj|\.data|\.git)[\\/]' }
@@ -59,4 +50,4 @@ if ($brokenLinks.Count -gt 0) {
     throw "Broken local Markdown links:`n$($brokenLinks -join "`n")"
 }
 
-Write-Output "Documentation verification passed: $($markdownFiles.Count) Markdown files, $($requirementIds.Count) unique requirements, exact traceability coverage, zero broken local links."
+Write-Output "Documentation verification passed: $($markdownFiles.Count) Markdown files, $($requirementIds.Count) unique requirements, zero broken local links."

@@ -7,7 +7,7 @@ param(
     [int] $HttpsPort = 7443,
 
     [ValidateRange(1, 65535)]
-    [int] $PostgresPort = 55432,
+    [int] $SqlServerPort = 14333,
 
     [string] $OutputDirectory = (Join-Path (Get-Location) '.data/field-test')
 )
@@ -27,31 +27,35 @@ if (Test-Path -LiteralPath $outputRoot) {
 }
 
 $databaseName = 'display_control'
-$databaseUser = 'display_control_owner'
+$databaseOwnerUser = 'sa'
+$databaseRuntimeUser = 'display_control_runtime_login'
 $composeProjectName = 'display-control-field-test'
-$databasePasswordBytes = New-Object byte[] 32
+$databaseOwnerPasswordBytes = New-Object byte[] 32
+$databaseRuntimePasswordBytes = New-Object byte[] 32
 $databaseRandom = [System.Security.Cryptography.RandomNumberGenerator]::Create()
 try {
-    $databaseRandom.GetBytes($databasePasswordBytes)
+    $databaseRandom.GetBytes($databaseOwnerPasswordBytes)
+    $databaseRandom.GetBytes($databaseRuntimePasswordBytes)
 }
 finally {
     $databaseRandom.Dispose()
 }
-$databasePassword = -join ($databasePasswordBytes | ForEach-Object { $_.ToString('x2') })
-$databaseConnectionString = "Host=127.0.0.1;Port=$PostgresPort;Database=$databaseName;Username=$databaseUser;Password=$databasePassword"
+$databaseOwnerPassword = 'Sql1!' + (-join ($databaseOwnerPasswordBytes | ForEach-Object { $_.ToString('x2') }))
+$databaseRuntimePassword = 'Sql1!' + (-join ($databaseRuntimePasswordBytes | ForEach-Object { $_.ToString('x2') }))
+$databaseOwnerConnectionString = "Server=127.0.0.1,$SqlServerPort;Database=$databaseName;User Id=$databaseOwnerUser;Password=$databaseOwnerPassword;TrustServerCertificate=True"
+$databaseRuntimeConnectionString = "Server=127.0.0.1,$SqlServerPort;Database=$databaseName;User Id=$databaseRuntimeUser;Password=$databaseRuntimePassword;TrustServerCertificate=True"
 
 & (Join-Path $PSScriptRoot 'New-DevelopmentSecurityMaterial.ps1') `
-    -DatabaseConnectionString $databaseConnectionString `
+    -DatabaseConnectionString $databaseRuntimeConnectionString `
     -OutputDirectory $outputRoot `
     -HttpsHost $ServerHost `
     -HttpsPort $HttpsPort
 
 $composeEnvironmentPath = Join-Path $outputRoot 'compose.env'
 $composeEnvironment = @"
-POSTGRES_DB=$databaseName
-POSTGRES_USER=$databaseUser
-POSTGRES_PASSWORD=$databasePassword
-POSTGRES_PORT=$PostgresPort
+MSSQL_PID=Developer
+MSSQL_SA_PASSWORD=$databaseOwnerPassword
+SQLSERVER_PORT=$SqlServerPort
 CLAMAV_PORT=3310
 "@
 [System.IO.File]::WriteAllText($composeEnvironmentPath, $composeEnvironment)
@@ -60,53 +64,55 @@ function Quote-PowerShellSingle([string] $value) {
     return "'" + $value.Replace("'", "''") + "'"
 }
 
+$runtimeLoginSqlPath = Join-Path $outputRoot 'provision-runtime-login.sql'
+$runtimeLoginSql = @"
+IF SUSER_ID(N'$databaseRuntimeUser') IS NULL
+    CREATE LOGIN [$databaseRuntimeUser] WITH PASSWORD = '$databaseRuntimePassword', CHECK_POLICY = OFF, CHECK_EXPIRATION = OFF;
+ELSE
+    ALTER LOGIN [$databaseRuntimeUser] WITH PASSWORD = '$databaseRuntimePassword';
+"@
+[System.IO.File]::WriteAllText($runtimeLoginSqlPath, $runtimeLoginSql)
+
 $launcherPath = Join-Path $outputRoot 'start-field-test-server.ps1'
 $apiLauncherPath = Join-Path $outputRoot 'run-api.local.ps1'
+$runtimeUserTemplatePath = Join-Path $repositoryRoot 'deploy/sqlserver/runtime-user.template.sql'
+$runtimeVerificationPath = Join-Path $repositoryRoot 'deploy/sqlserver/verify-runtime-security.sql'
 $launcher = @"
 `$ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $(Quote-PowerShellSingle $repositoryRoot)
 
-`$previousErrorActionPreference = `$ErrorActionPreference
-`$ErrorActionPreference = 'SilentlyContinue'
 docker info *> `$null
-`$dockerInfoExitCode = `$LASTEXITCODE
-`$ErrorActionPreference = `$previousErrorActionPreference
-if (`$dockerInfoExitCode -ne 0) {
-    throw 'Docker Desktop is not running. Start it and run this script again.'
-}
+if (`$LASTEXITCODE -ne 0) { throw 'Docker Desktop is not running.' }
 
-docker compose --project-name '$composeProjectName' --env-file $(Quote-PowerShellSingle $composeEnvironmentPath) up -d postgres clamav
-if (`$LASTEXITCODE -ne 0) { throw 'Docker Compose failed to start PostgreSQL and ClamAV.' }
+docker compose --project-name '$composeProjectName' --env-file $(Quote-PowerShellSingle $composeEnvironmentPath) up -d sqlserver clamav
+if (`$LASTEXITCODE -ne 0) { throw 'Docker Compose failed to start SQL Server and ClamAV.' }
 
-`$postgresReady = `$false
-foreach (`$attempt in 1..60) {
-    `$previousErrorActionPreference = `$ErrorActionPreference
-    `$ErrorActionPreference = 'SilentlyContinue'
-    docker compose --project-name '$composeProjectName' --env-file $(Quote-PowerShellSingle $composeEnvironmentPath) exec -T postgres pg_isready -U '$databaseUser' -d '$databaseName' *> `$null
-    `$probeExitCode = `$LASTEXITCODE
-    `$ErrorActionPreference = `$previousErrorActionPreference
-    if (`$probeExitCode -eq 0) { `$postgresReady = `$true; break }
+`$sqlContainerId = docker compose --project-name '$composeProjectName' --env-file $(Quote-PowerShellSingle $composeEnvironmentPath) ps -q sqlserver
+`$sqlReady = `$false
+foreach (`$attempt in 1..90) {
+    `$health = docker inspect --format '{{.State.Health.Status}}' `$sqlContainerId 2>`$null
+    if (`$health -eq 'healthy') { `$sqlReady = `$true; break }
     Start-Sleep -Seconds 2
 }
-if (-not `$postgresReady) { throw 'PostgreSQL did not become ready within two minutes.' }
+if (-not `$sqlReady) { throw 'SQL Server did not become ready within three minutes.' }
 
-`$clamAvReady = `$false
-foreach (`$attempt in 1..150) {
-    `$previousErrorActionPreference = `$ErrorActionPreference
-    `$ErrorActionPreference = 'SilentlyContinue'
-    docker compose --project-name '$composeProjectName' --env-file $(Quote-PowerShellSingle $composeEnvironmentPath) exec -T clamav clamdscan --ping 1 *> `$null
-    `$probeExitCode = `$LASTEXITCODE
-    `$ErrorActionPreference = `$previousErrorActionPreference
-    if (`$probeExitCode -eq 0) { `$clamAvReady = `$true; break }
-    Start-Sleep -Seconds 2
-}
-if (-not `$clamAvReady) { throw 'ClamAV did not become ready within five minutes.' }
+docker compose --project-name '$composeProjectName' --env-file $(Quote-PowerShellSingle $composeEnvironmentPath) exec --env 'SQLCMDPASSWORD=$databaseOwnerPassword' -T sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b -Q "IF DB_ID(N'$databaseName') IS NULL CREATE DATABASE [$databaseName];"
+if (`$LASTEXITCODE -ne 0) { throw 'Database creation failed.' }
 
-`$env:DISPLAYCONTROL_MIGRATION_CONNECTION=$(Quote-PowerShellSingle $databaseConnectionString)
+`$env:DISPLAYCONTROL_MIGRATION_CONNECTION=$(Quote-PowerShellSingle $databaseOwnerConnectionString)
 dotnet tool restore
 if (`$LASTEXITCODE -ne 0) { throw 'The pinned dotnet-ef tool could not be restored.' }
-dotnet ef database update --project src/DisplayControl.Infrastructure --startup-project src/DisplayControl.Api
-if (`$LASTEXITCODE -ne 0) { throw 'Database migration failed.' }
+dotnet build src/DisplayControl.Api/DisplayControl.Api.csproj --configuration Release
+if (`$LASTEXITCODE -ne 0) { throw 'The Release build required for migration failed.' }
+dotnet ef database update --project src/DisplayControl.SqlServerMigrations --startup-project src/DisplayControl.Api --configuration Release --no-build
+if (`$LASTEXITCODE -ne 0) { throw 'SQL Server migration failed.' }
+
+Get-Content -Raw -LiteralPath $(Quote-PowerShellSingle $runtimeLoginSqlPath) | docker compose --project-name '$composeProjectName' --env-file $(Quote-PowerShellSingle $composeEnvironmentPath) exec --env 'SQLCMDPASSWORD=$databaseOwnerPassword' -T sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b -d master
+if (`$LASTEXITCODE -ne 0) { throw 'Database runtime login creation failed.' }
+Get-Content -Raw -LiteralPath $(Quote-PowerShellSingle $runtimeUserTemplatePath) | docker compose --project-name '$composeProjectName' --env-file $(Quote-PowerShellSingle $composeEnvironmentPath) exec --env 'SQLCMDPASSWORD=$databaseOwnerPassword' -T sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b -d '$databaseName' -v RuntimeUser='$databaseRuntimeUser'
+if (`$LASTEXITCODE -ne 0) { throw 'Database runtime grants failed.' }
+Get-Content -Raw -LiteralPath $(Quote-PowerShellSingle $runtimeVerificationPath) | docker compose --project-name '$composeProjectName' --env-file $(Quote-PowerShellSingle $composeEnvironmentPath) exec --env 'SQLCMDPASSWORD=$databaseRuntimePassword' -T sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U '$databaseRuntimeUser' -C -b -d '$databaseName'
+if (`$LASTEXITCODE -ne 0) { throw 'Database runtime security verification failed.' }
 
 npm.cmd run build --workspace admin-web
 if (`$LASTEXITCODE -ne 0) { throw 'The administration application build failed.' }
@@ -119,10 +125,10 @@ Write-Host 'Keep this window open during the Raspberry Pi test.'
 
 $serverCaPath = Join-Path $outputRoot 'field-test-server-ca.crt'
 Write-Host ''
-Write-Host 'Field-test environment created.'
+Write-Host 'SQL Server field-test environment created.'
 Write-Host "1. Trust the local CA for the current Windows user (one time):"
 Write-Host "   Import-Certificate -FilePath '$serverCaPath' -CertStoreLocation Cert:\CurrentUser\Root"
-Write-Host "2. Start Docker Desktop."
+Write-Host '2. Start Docker Desktop.'
 Write-Host "3. Start the complete server: & '$launcherPath'"
 Write-Host "4. Open https://${ServerHost}:$HttpsPort"
 Write-Host "5. Give the Pi installer this public CA: $serverCaPath"

@@ -5,6 +5,7 @@
     <Project Path="src/DisplayControl.DeviceAgent/DisplayControl.DeviceAgent.csproj" />
     <Project Path="src/DisplayControl.Domain/DisplayControl.Domain.csproj" />
     <Project Path="src/DisplayControl.Infrastructure/DisplayControl.Infrastructure.csproj" />
+    <Project Path="src/DisplayControl.SqlServerMigrations/DisplayControl.SqlServerMigrations.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/DisplayControl.DeviceAgent.Tests/DisplayControl.DeviceAgent.Tests.csproj" />

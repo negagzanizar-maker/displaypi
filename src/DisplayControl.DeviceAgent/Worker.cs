@@ -4,7 +4,8 @@ namespace DisplayControl.DeviceAgent;
 
 public sealed class Worker(
     ILogger<Worker> logger,
-    DeviceControlClient controlClient,
+    IDeviceSynchronizationClient controlClient,
+    AgentSynchronizationSignal synchronizationSignal,
     PlayerStateStore playerState,
     AgentHealthStore health,
     IOptions<AgentRuntimeOptions> runtimeOptions) : BackgroundService
@@ -37,7 +38,7 @@ public sealed class Worker(
             var jitterMilliseconds = Random.Shared.Next(0, 2001);
             var delay = TimeSpan.FromSeconds(_runtimeOptions.HeartbeatIntervalSeconds)
                 .Add(TimeSpan.FromMilliseconds(jitterMilliseconds));
-            await Task.Delay(delay, stoppingToken);
+            await synchronizationSignal.WaitForSignalOrTimeoutAsync(delay, stoppingToken);
         }
     }
 }
@@ -61,4 +62,10 @@ internal static partial class AgentLog
 
     [LoggerMessage(1005, LogLevel.Warning, "Device heartbeat transport failed with safe error type {ErrorType}.")]
     public static partial void HeartbeatTransportFailed(ILogger logger, string errorType);
+
+    [LoggerMessage(1006, LogLevel.Information, "Connected to the authenticated device state-change stream.")]
+    public static partial void StateChangeStreamConnected(ILogger logger);
+
+    [LoggerMessage(1007, LogLevel.Warning, "The device state-change stream disconnected with safe error type {ErrorType}.")]
+    public static partial void StateChangeStreamFailed(ILogger logger, string errorType);
 }

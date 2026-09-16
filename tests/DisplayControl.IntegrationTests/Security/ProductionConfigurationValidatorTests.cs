@@ -26,7 +26,7 @@ public sealed class ProductionConfigurationValidatorTests
         Assert.Throws<InvalidOperationException>(() =>
             ProductionConfigurationValidator.Validate(
                 explicitHosts,
-                "Host=db.example.test;Database=display;Username=runtime;Password=test;SSL Mode=Prefer"));
+                "Server=tcp:db.example.test,1433;Database=display;User Id=runtime;Password=test;Encrypt=False;TrustServerCertificate=True"));
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public sealed class ProductionConfigurationValidatorTests
     }
 
     private const string VerifiedDatabaseConnectionString =
-        "Host=db.example.test;Database=display;Username=runtime;Password=test;SSL Mode=VerifyFull";
+        "Server=tcp:db.example.test,1433;Database=display;User Id=runtime;Password=test;Encrypt=True;TrustServerCertificate=False";
 
     private sealed class ProductionPathFixture : IDisposable
     {

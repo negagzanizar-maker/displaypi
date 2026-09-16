@@ -3,6 +3,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using DisplayControl.Api.Pagination;
 using DisplayControl.Api.Security;
+using DisplayControl.Application.Content;
 using DisplayControl.Domain.Content;
 using DisplayControl.Domain.Operations;
 using DisplayControl.Domain.Playlists;
@@ -29,6 +30,7 @@ public sealed class PlaylistsController(
     {
         if (!CursorPage.TryReadOffset(cursor, out var offset)) return BadRequest("Invalid pagination cursor.");
         var playlists = await dbContext.Playlists.AsNoTracking()
+            .Where(value => value.ArchivedAtUtc == null)
             .OrderByDescending(value => value.UpdatedAtUtc)
             .ThenBy(value => value.Id)
             .Skip(offset)
@@ -67,14 +69,25 @@ public sealed class PlaylistsController(
         }
 
         var versionIds = request.Items.Select(value => value.ContentVersionId).ToArray();
+        var captionVersionIds = request.Items
+            .Where(value => value.CaptionContentVersionId.HasValue)
+            .Select(value => value.CaptionContentVersionId!.Value)
+            .Distinct()
+            .ToArray();
+        if (captionVersionIds.Any(versionIds.Contains))
+        {
+            return InvalidPlaylist("playlist_caption_invalid", "A caption must be a separate text content item.");
+        }
+
+        var referencedVersionIds = versionIds.Concat(captionVersionIds).Distinct().ToArray();
         var contentVersions = await dbContext.ContentVersions
-            .Where(value => versionIds.Contains(value.Id))
+            .Where(value => referencedVersionIds.Contains(value.Id))
             .ToListAsync(cancellationToken);
         var assetIds = contentVersions.Select(value => value.ContentAssetId).ToArray();
         var assets = await dbContext.ContentAssets
             .Where(value => assetIds.Contains(value.Id))
             .ToDictionaryAsync(value => value.Id, cancellationToken);
-        if (contentVersions.Count != versionIds.Length ||
+        if (contentVersions.Count != referencedVersionIds.Length ||
             contentVersions.Any(value => value.ApprovedAtUtc is null ||
                 !string.Equals(value.ScanState, "clean", StringComparison.Ordinal) ||
                 !assets.TryGetValue(value.ContentAssetId, out var asset) ||
@@ -88,13 +101,20 @@ public sealed class PlaylistsController(
         {
             var item = request.Items[index];
             var mediaKind = assets[contentById[item.ContentVersionId].ContentAssetId].MediaKind;
+            var hasInlineCaption = !string.IsNullOrWhiteSpace(item.CaptionText);
+            var supportsCaption = mediaKind is MediaKind.Jpeg or MediaKind.Png or MediaKind.WebP or MediaKind.Mp4;
             if ((mediaKind != MediaKind.Mp4 && item.DurationMilliseconds is null) ||
                 item.DurationMilliseconds is < 1000 or > 86_400_000 ||
-                (mediaKind != MediaKind.Mp4 && item.LoopVideo))
+                (mediaKind != MediaKind.Mp4 && item.LoopVideo) ||
+                item.CaptionContentVersionId.HasValue && hasInlineCaption ||
+                hasInlineCaption && !supportsCaption ||
+                item.CaptionContentVersionId is Guid captionId &&
+                (!supportsCaption ||
+                    assets[contentById[captionId].ContentAssetId].MediaKind != MediaKind.PlainText))
             {
                 return InvalidPlaylist(
                     "playlist_presentation_invalid",
-                    "Images and text require a 1-second to 24-hour duration; only videos can loop.");
+                    "Images and text require a 1-second to 24-hour duration; only videos can loop, and images or videos can have one caption.");
             }
         }
 
@@ -126,8 +146,13 @@ public sealed class PlaylistsController(
             position,
             item.DurationMilliseconds,
             item.LoopVideo,
-            "{}")));
+            PlaylistItemPresentation.Serialize(item.CaptionContentVersionId, item.CaptionText))));
         AddAudit(tenantId, actorId, "playlist.created", playlist.Id, new { versionId = version.Id }, nowUtc);
+        if (request.PublishImmediately)
+        {
+            version.Publish(actorId, nowUtc);
+            AddAudit(tenantId, actorId, "playlist.published", playlist.Id, new { versionId = version.Id }, nowUtc);
+        }
         await dbContext.SaveChangesAsync(cancellationToken);
         return CreatedAtAction(nameof(Get), new { tenantId, playlistId = playlist.Id }, ToResponse(
             playlist,
@@ -143,7 +168,7 @@ public sealed class PlaylistsController(
         CancellationToken cancellationToken)
     {
         var playlist = await dbContext.Playlists.AsNoTracking().SingleOrDefaultAsync(
-            value => value.Id == playlistId,
+            value => value.Id == playlistId && value.ArchivedAtUtc == null,
             cancellationToken);
         if (playlist is null)
         {
@@ -158,6 +183,129 @@ public sealed class PlaylistsController(
             value => value.PlaylistVersionId == version.Id,
             cancellationToken);
         return Ok(ToResponse(playlist, version, itemCount));
+    }
+
+    [HttpGet("{playlistId:guid}/items")]
+    [Authorize(Policy = AuthorizationPolicies.TenantViewer)]
+    public async Task<ActionResult<IReadOnlyList<PlaylistItemResponse>>> ListItems(
+        Guid tenantId,
+        Guid playlistId,
+        CancellationToken cancellationToken)
+    {
+        if (!await dbContext.Playlists.AsNoTracking().AnyAsync(
+                value => value.Id == playlistId && value.ArchivedAtUtc == null,
+                cancellationToken))
+        {
+            return NotFound();
+        }
+
+        var versionId = await dbContext.PlaylistVersions.AsNoTracking()
+            .Where(value => value.PlaylistId == playlistId)
+            .OrderByDescending(value => value.VersionNumber)
+            .Select(value => value.Id)
+            .FirstAsync(cancellationToken);
+        var items = await dbContext.PlaylistItems.AsNoTracking()
+            .Where(value => value.PlaylistVersionId == versionId)
+            .OrderBy(value => value.Position)
+            .ToListAsync(cancellationToken);
+        var versionIds = items.Select(value => value.ContentVersionId).Distinct().ToArray();
+        var content = await (
+            from version in dbContext.ContentVersions.AsNoTracking()
+            join asset in dbContext.ContentAssets.AsNoTracking()
+                on version.ContentAssetId equals asset.Id
+            where versionIds.Contains(version.Id)
+            select new { VersionId = version.Id, asset.Title, asset.MediaKind })
+            .ToDictionaryAsync(value => value.VersionId, cancellationToken);
+
+        return Ok(items.Select(value => new PlaylistItemResponse(
+            value.Id,
+            value.ContentVersionId,
+            content[value.ContentVersionId].Title,
+            content[value.ContentVersionId].MediaKind.ToString(),
+            value.Position,
+            value.DurationMilliseconds,
+            value.LoopVideo)).ToArray());
+    }
+
+    [HttpPost("{playlistId:guid}/items/{itemId:guid}/remove")]
+    [Authorize(Policy = AuthorizationPolicies.TenantContentManager)]
+    public async Task<ActionResult<PlaylistResponse>> RemoveItem(
+        Guid tenantId,
+        Guid playlistId,
+        Guid itemId,
+        ChangePlaylistRequest request,
+        CancellationToken cancellationToken)
+    {
+        var playlist = await dbContext.Playlists.SingleOrDefaultAsync(
+            value => value.Id == playlistId && value.ArchivedAtUtc == null,
+            cancellationToken);
+        if (playlist is null) return NotFound();
+        if (playlist.ConcurrencyToken != request.ConcurrencyToken)
+        {
+            return ConflictProblem("concurrency_conflict", "The playlist changed. Refresh it before retrying.");
+        }
+
+        var previousVersion = await dbContext.PlaylistVersions
+            .Where(value => value.PlaylistId == playlistId)
+            .OrderByDescending(value => value.VersionNumber)
+            .FirstAsync(cancellationToken);
+        var previousItems = await dbContext.PlaylistItems.AsNoTracking()
+            .Where(value => value.PlaylistVersionId == previousVersion.Id)
+            .OrderBy(value => value.Position)
+            .ToListAsync(cancellationToken);
+        var removed = previousItems.SingleOrDefault(value => value.Id == itemId);
+        if (removed is null) return NotFound();
+        if (previousItems.Count == 1)
+        {
+            return ConflictProblem("playlist_last_item", "A playlist cannot be empty. Delete the playlist instead.");
+        }
+
+        var actorId = CurrentUserId();
+        var nowUtc = timeProvider.GetUtcNow();
+        var nextVersion = new PlaylistVersion(
+            Guid.NewGuid(), tenantId, playlist.Id, previousVersion.VersionNumber + 1,
+            playlist.Name, playlist.Description, actorId, nowUtc);
+        nextVersion.Publish(actorId, nowUtc);
+        dbContext.PlaylistVersions.Add(nextVersion);
+        dbContext.PlaylistItems.AddRange(previousItems
+            .Where(value => value.Id != itemId)
+            .Select((value, position) => new PlaylistItem(
+                Guid.NewGuid(), tenantId, nextVersion.Id, value.ContentVersionId, position,
+                value.DurationMilliseconds, value.LoopVideo, value.PresentationJson)));
+        playlist.RecordRevision(nowUtc);
+        AddAudit(tenantId, actorId, "playlist.item_removed", playlist.Id, new
+        {
+            previousVersionId = previousVersion.Id,
+            versionId = nextVersion.Id,
+            removed.ContentVersionId
+        }, nowUtc);
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return Ok(ToResponse(playlist, nextVersion, previousItems.Count - 1));
+    }
+
+    [HttpPost("{playlistId:guid}/archive")]
+    [Authorize(Policy = AuthorizationPolicies.TenantContentManager)]
+    public async Task<IActionResult> Archive(
+        Guid tenantId,
+        Guid playlistId,
+        ChangePlaylistRequest request,
+        CancellationToken cancellationToken)
+    {
+        var playlist = await dbContext.Playlists.SingleOrDefaultAsync(
+            value => value.Id == playlistId && value.ArchivedAtUtc == null,
+            cancellationToken);
+        if (playlist is null) return NotFound();
+        if (playlist.ConcurrencyToken != request.ConcurrencyToken)
+        {
+            return ConflictProblem("concurrency_conflict", "The playlist changed. Refresh it before retrying.");
+        }
+
+        var actorId = CurrentUserId();
+        var nowUtc = timeProvider.GetUtcNow();
+        playlist.Archive(nowUtc);
+        AddAudit(tenantId, actorId, "playlist.archived", playlist.Id, new { request.Reason }, nowUtc);
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return NoContent();
     }
 
     [HttpPost("{playlistId:guid}/versions/{versionId:guid}/publish")]
@@ -182,11 +330,22 @@ public sealed class PlaylistsController(
         var items = await dbContext.PlaylistItems
             .Where(value => value.PlaylistVersionId == versionId)
             .ToListAsync(cancellationToken);
-        var contentIds = items.Select(value => value.ContentVersionId).ToArray();
+        var captionIds = new List<Guid>();
+        foreach (var item in items)
+        {
+            if (!PlaylistItemPresentation.TryReadCaptionContentVersionId(item.PresentationJson, out var captionId))
+            {
+                return ConflictProblem("playlist_presentation_invalid", "Playlist presentation metadata is invalid.");
+            }
+
+            if (captionId.HasValue) captionIds.Add(captionId.Value);
+        }
+
+        var contentIds = items.Select(value => value.ContentVersionId).Concat(captionIds).Distinct().ToArray();
         var cleanCount = await dbContext.ContentVersions.CountAsync(
             value => contentIds.Contains(value.Id) && value.ApprovedAtUtc != null && value.ScanState == "clean",
             cancellationToken);
-        if (items.Count == 0 || cleanCount != items.Count)
+        if (items.Count == 0 || cleanCount != contentIds.Length)
         {
             return ConflictProblem("playlist_content_unavailable", "Playlist content is no longer publishable.");
         }
@@ -267,12 +426,28 @@ public sealed class PlaylistsController(
 public sealed record CreatePlaylistRequest(
     [param: Required, StringLength(200, MinimumLength = 1)] string Name,
     [param: StringLength(2000)] string? Description,
-    [param: Required] IReadOnlyList<CreatePlaylistItemRequest> Items);
+    [param: Required] IReadOnlyList<CreatePlaylistItemRequest> Items,
+    bool PublishImmediately = false);
 
 public sealed record CreatePlaylistItemRequest(
     Guid ContentVersionId,
     [param: Range(1000, 86_400_000)] int? DurationMilliseconds,
-    bool LoopVideo = false);
+    bool LoopVideo = false,
+    Guid? CaptionContentVersionId = null,
+    [param: StringLength(PlaylistItemPresentation.MaximumCaptionTextLength)] string? CaptionText = null);
+
+public sealed record ChangePlaylistRequest(
+    Guid ConcurrencyToken,
+    [param: StringLength(500)] string? Reason = null);
+
+public sealed record PlaylistItemResponse(
+    Guid Id,
+    Guid ContentVersionId,
+    string Title,
+    string MediaKind,
+    int Position,
+    int? DurationMilliseconds,
+    bool LoopVideo);
 
 public sealed record PlaylistResponse(
     Guid Id,

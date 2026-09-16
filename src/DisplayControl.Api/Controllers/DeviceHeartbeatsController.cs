@@ -74,6 +74,7 @@ public sealed record DeviceHeartbeatRequest(
     long? AppliedDesiredStateVersion,
     [param: Required, StringLength(64, MinimumLength = 1)] string PlayerStateCode,
     [param: StringLength(64)] string? LastErrorCode,
+    Guid? CurrentContentVersionId,
     IReadOnlyList<DeviceEnrollmentNetworkRequest> NetworkInterfaces);
 
 public sealed record DeviceHeartbeatResponse(

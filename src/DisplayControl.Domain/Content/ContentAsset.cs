@@ -67,7 +67,7 @@ public sealed class ContentAsset : TenantOwnedEntity
 
         LifecycleState = outcome switch
         {
-            ContentScanOutcome.Clean => ContentLifecycleState.Draft,
+            ContentScanOutcome.Clean => ContentLifecycleState.Approved,
             ContentScanOutcome.Infected => ContentLifecycleState.Rejected,
             ContentScanOutcome.Unavailable => ContentLifecycleState.Quarantined,
             _ => throw new ArgumentOutOfRangeException(nameof(outcome))

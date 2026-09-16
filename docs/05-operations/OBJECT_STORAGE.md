@@ -2,7 +2,7 @@
 
 ## Boundary
 
-Media bytes are never stored in PostgreSQL and never served from a public web root. Application code addresses an object through `PrivateObjectKey`, which contains only normalized tenant and object UUIDs. Database `storage_key` values are server-generated references; a browser filename, URL, absolute path, or device-supplied value must never become an object key.
+Media bytes are never stored in SQL Server and never served from a public web root. Application code addresses an object through `PrivateObjectKey`, which contains only normalized tenant and object UUIDs. Database `storage_key` values are server-generated references; a browser filename, URL, absolute path, or device-supplied value must never become an object key.
 
 ## Filesystem adapter
 
@@ -16,7 +16,7 @@ Media bytes are never stored in PostgreSQL and never served from a public web ro
 - refuses to overwrite an immutable object; and
 - exposes no physical path through the application contract.
 
-The root must not be synchronized into the repository, mounted as a static-file directory, or shared with unrelated workloads. It must be owner-only, encrypted at rest by the deployment volume, backed up coherently with PostgreSQL, and mounted on exactly one API writer. Horizontal API replicas require the production adapter gate below.
+The root must not be synchronized into the repository, mounted as a static-file directory, or shared with unrelated workloads. It must be owner-only, encrypted at rest by the deployment volume, backed up coherently with SQL Server metadata, and mounted on exactly one API writer. Horizontal API replicas require the production adapter gate below.
 
 ## Production adapter gate
 

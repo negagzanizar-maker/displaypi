@@ -13,8 +13,8 @@ using DisplayControl.Infrastructure.Tenancy;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
 
 namespace DisplayControl.Api.Controllers;
 
@@ -124,7 +124,7 @@ public sealed class PlatformTenantsController(
             await transaction.CommitAsync(cancellationToken);
         }
         catch (DbUpdateException exception) when (
-            exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+            exception.InnerException is SqlException { Number: 2601 or 2627 })
         {
             return ConflictProblem("tenant_conflict", "The tenant slug or administrator invitation already exists.");
         }

@@ -8,6 +8,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using DisplayControl.Api.Controllers;
+using DisplayControl.Api.Realtime;
 using DisplayControl.Api.Security;
 using DisplayControl.Application.Security;
 using DisplayControl.Application.Tenancy;
@@ -20,6 +21,7 @@ using DisplayControl.Infrastructure.Identity;
 using DisplayControl.Infrastructure.Persistence;
 using DisplayControl.Infrastructure.Security;
 using DisplayControl.Infrastructure.Tenancy;
+using DisplayControl.IntegrationTests.Database;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -32,8 +34,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Npgsql;
-using Testcontainers.PostgreSql;
 
 namespace DisplayControl.IntegrationTests.Api;
 
@@ -49,7 +49,7 @@ public sealed class AuthenticationFlowTests : IClassFixture<AuthenticationFlowFi
     }
 
     [Fact]
-    public async Task TenantIdentityDeviceAndContentLifecycleUsesRealPostgreSql18()
+    public async Task TenantIdentityDeviceAndContentLifecycleUsesRealSqlServer2022()
     {
         using var client = _fixture.CreateClient();
         using (var readiness = await client.GetAsync("/_health/ready"))
@@ -564,17 +564,16 @@ public sealed class AuthenticationFlowTests : IClassFixture<AuthenticationFlowFi
                 ?? throw new InvalidOperationException("Content upload response was empty.");
         }
 
-        Assert.Equal(ContentLifecycleState.Draft, uploadedContent.LifecycleState);
+        Assert.Equal(ContentLifecycleState.Approved, uploadedContent.LifecycleState);
         Assert.Equal("clean", uploadedContent.LatestVersion?.ScanState);
-        using (var approve = await PostAsync(
-            client,
-            $"/api/v1/tenants/{AuthenticationFlowFixture.TenantId}/contents/{uploadedContent.Id}/versions/{uploadedContent.LatestVersion!.Id}/approve",
-            new { concurrencyToken = uploadedContent.ConcurrencyToken },
-            authenticatedSession.CsrfToken))
+        Assert.NotNull(uploadedContent.LatestVersion?.ApprovedAtUtc);
+
+        using (var preview = await client.GetAsync(
+            $"/api/v1/tenants/{AuthenticationFlowFixture.TenantId}/contents/{uploadedContent.Id}/versions/{uploadedContent.LatestVersion!.Id}/preview"))
         {
-            approve.EnsureSuccessStatusCode();
-            var approved = await approve.Content.ReadFromJsonAsync<ContentResponse>(ResponseJsonOptions);
-            Assert.Equal(ContentLifecycleState.Approved, approved?.LifecycleState);
+            preview.EnsureSuccessStatusCode();
+            Assert.Equal("image/png", preview.Content.Headers.ContentType?.MediaType);
+            Assert.Equal(png, await preview.Content.ReadAsByteArrayAsync());
         }
 
         PlaylistResponse playlist;
@@ -585,6 +584,7 @@ public sealed class AuthenticationFlowTests : IClassFixture<AuthenticationFlowFi
             {
                 name = "Lobby rotation",
                 description = "Approved lobby media",
+                publishImmediately = true,
                 items = new[]
                 {
                     new
@@ -602,14 +602,9 @@ public sealed class AuthenticationFlowTests : IClassFixture<AuthenticationFlowFi
                 ?? throw new InvalidOperationException("Playlist response was empty.");
         }
 
-        using (var publishPlaylist = await PostAsync(
-            client,
-            $"/api/v1/tenants/{AuthenticationFlowFixture.TenantId}/playlists/{playlist.Id}/versions/{playlist.LatestVersion!.Id}/publish",
-            new { },
-            authenticatedSession.CsrfToken))
-        {
-            publishPlaylist.EnsureSuccessStatusCode();
-        }
+        var playlistVersion = playlist.LatestVersion
+            ?? throw new InvalidOperationException("Published playlist response had no version.");
+        Assert.Equal("published", playlistVersion.PublicationState);
 
         DeviceGroupResponse deviceGroup;
         using (var createGroup = await PostAsync(
@@ -637,13 +632,16 @@ public sealed class AuthenticationFlowTests : IClassFixture<AuthenticationFlowFi
 
         var groupEndsAtUtc = _fixture.UtcNow.AddMinutes(5);
         groupEndsAtUtc = groupEndsAtUtc.AddTicks(-(groupEndsAtUtc.Ticks % TimeSpan.TicksPerMillisecond));
+        using var groupPublicationSignal = _fixture.SubscribeDeviceStateChanges(
+            AuthenticationFlowFixture.TenantId,
+            enrolled.DeviceId);
         GroupAssignmentPublishedResponse groupAssignment;
         using (var assignGroup = await PostAsync(
             client,
             $"/api/v1/tenants/{AuthenticationFlowFixture.TenantId}/device-groups/{deviceGroup.Id}/assignments",
             new
             {
-                playlistVersionId = playlist.LatestVersion.Id,
+                playlistVersionId = playlistVersion.Id,
                 priority = 10,
                 startsAtUtc = _fixture.UtcNow.AddMinutes(-1),
                 endsAtUtc = groupEndsAtUtc,
@@ -655,13 +653,14 @@ public sealed class AuthenticationFlowTests : IClassFixture<AuthenticationFlowFi
             groupAssignment = await assignGroup.Content.ReadFromJsonAsync<GroupAssignmentPublishedResponse>()
                 ?? throw new InvalidOperationException("Group-assignment response was empty.");
         }
+        Assert.True(await ReceivesStateChangeAsync(groupPublicationSignal));
 
         using (var equalPriorityCollision = await PostAsync(
             client,
             $"/api/v1/tenants/{AuthenticationFlowFixture.TenantId}/device-groups/{deviceGroup.Id}/assignments",
             new
             {
-                playlistVersionId = playlist.LatestVersion.Id,
+                playlistVersionId = playlistVersion.Id,
                 priority = 10,
                 startsAtUtc = _fixture.UtcNow,
                 endsAtUtc = groupEndsAtUtc,
@@ -711,17 +710,34 @@ public sealed class AuthenticationFlowTests : IClassFixture<AuthenticationFlowFi
             out var groupLeasePayload));
         Assert.Equal(groupEndsAtUtc, groupLeasePayload?.ExpiresAtUtc);
 
+        using var groupRemovalSignal = _fixture.SubscribeDeviceStateChanges(
+            AuthenticationFlowFixture.TenantId,
+            enrolled.DeviceId);
+        using (var removeGroupMember = await PutAsync(
+            client,
+            $"/api/v1/tenants/{AuthenticationFlowFixture.TenantId}/device-groups/{deviceGroup.Id}/members",
+            new { deviceIds = Array.Empty<Guid>(), concurrencyToken = deviceGroup.ConcurrencyToken },
+            authenticatedSession.CsrfToken))
+        {
+            removeGroupMember.EnsureSuccessStatusCode();
+        }
+        Assert.True(await ReceivesStateChangeAsync(groupRemovalSignal));
+
+        using var devicePublicationSignal = _fixture.SubscribeDeviceStateChanges(
+            AuthenticationFlowFixture.TenantId,
+            enrolled.DeviceId);
         AssignmentPublishedResponse assignment;
         using (var assign = await PostAsync(
             client,
             $"/api/v1/tenants/{AuthenticationFlowFixture.TenantId}/devices/{enrolled.DeviceId}/assignments",
-            new { playlistVersionId = playlist.LatestVersion.Id, priority = 0, presentationTimeZone = "UTC" },
+            new { playlistVersionId = playlistVersion.Id, priority = 0, presentationTimeZone = "UTC" },
             authenticatedSession.CsrfToken))
         {
             Assert.Equal(HttpStatusCode.Created, assign.StatusCode);
             assignment = await assign.Content.ReadFromJsonAsync<AssignmentPublishedResponse>()
                 ?? throw new InvalidOperationException("Assignment response was empty.");
         }
+        Assert.True(await ReceivesStateChangeAsync(devicePublicationSignal));
 
         DeviceHeartbeatResponse assignedHeartbeat;
         using (var heartbeatWithContent = await PostAsync(
@@ -921,6 +937,62 @@ public sealed class AuthenticationFlowTests : IClassFixture<AuthenticationFlowFi
             Assert.Equal("notLicensed", denied?.LicenseStatus);
         }
 
+        using var revocationSignal = _fixture.SubscribeDeviceStateChanges(
+            AuthenticationFlowFixture.TenantId,
+            transfer.Destination.DeviceId);
+        using (var revokeDestination = await PostAsync(
+            client,
+            $"/api/v1/tenants/{AuthenticationFlowFixture.TenantId}/licenses/{transfer.Destination.Id}/revoke",
+            new
+            {
+                concurrencyToken = transfer.Destination.ConcurrencyToken,
+                reason = "Real-time revocation regression"
+            },
+            authenticatedSession.CsrfToken))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, revokeDestination.StatusCode);
+        }
+        Assert.True(await ReceivesStateChangeAsync(revocationSignal));
+
+        var replacementLicenseStart = DateTimeOffset.UtcNow.AddMinutes(-1);
+        LicenseResponse replacementActiveLicense;
+        using (var createReplacementLicense = await PostAsync(
+            client,
+            $"/api/v1/tenants/{AuthenticationFlowFixture.TenantId}/licenses",
+            new
+            {
+                deviceId = replacementEnrollmentCode.DeviceId,
+                validFromUtc = replacementLicenseStart,
+                expiresAtUtc = replacementLicenseStart.AddHours(12),
+                reason = "Replacement after retaining revoked history"
+            },
+            authenticatedSession.CsrfToken))
+        {
+            Assert.Equal(HttpStatusCode.Created, createReplacementLicense.StatusCode);
+            replacementActiveLicense = await createReplacementLicense.Content
+                .ReadFromJsonAsync<LicenseResponse>(ResponseJsonOptions)
+                ?? throw new InvalidOperationException("Replacement licence response was empty.");
+        }
+
+        devices = await client.GetFromJsonAsync<DeviceSummaryResponse[]>(
+            $"/api/v1/tenants/{AuthenticationFlowFixture.TenantId}/devices",
+            ResponseJsonOptions);
+        var replacementDevice = Assert.Single(
+            devices ?? [],
+            value => value.Id == replacementEnrollmentCode.DeviceId);
+        Assert.Equal(LicenseEffectiveState.Active, replacementDevice.LicenseState);
+        Assert.NotNull(replacementDevice.LicenseExpiresAtUtc);
+        Assert.InRange(
+            (replacementActiveLicense.ExpiresAtUtc - replacementDevice.LicenseExpiresAtUtc.Value).Duration(),
+            TimeSpan.Zero,
+            TimeSpan.FromMilliseconds(1));
+
+        var replacementDeviceDetail = await client.GetFromJsonAsync<DeviceDetailResponse>(
+            $"/api/v1/tenants/{AuthenticationFlowFixture.TenantId}/devices/{replacementEnrollmentCode.DeviceId}",
+            ResponseJsonOptions);
+        Assert.Equal(LicenseEffectiveState.Active, replacementDeviceDetail?.License?.State);
+        Assert.Equal(replacementActiveLicense.Id, replacementDeviceDetail?.License?.Id);
+
         var members = await client.GetFromJsonAsync<TenantMemberResponse[]>(
             $"/api/v1/tenants/{AuthenticationFlowFixture.TenantId}/members",
             ResponseJsonOptions);
@@ -938,7 +1010,7 @@ public sealed class AuthenticationFlowTests : IClassFixture<AuthenticationFlowFi
 
         var auditEvents = await client.GetFromJsonAsync<AuditEventResponse[]>(
             $"/api/v1/tenants/{AuthenticationFlowFixture.TenantId}/audit-events");
-        Assert.Contains(auditEvents ?? [], value => value.Action == "content.approved");
+        Assert.Contains(auditEvents ?? [], value => value.Action == "content.automatically_approved");
         Assert.Contains(auditEvents ?? [], value => value.Action == "assignment.published");
         Assert.Contains(auditEvents ?? [], value => value.Action == "identity.authentication.sign_in");
         Assert.Contains(auditEvents ?? [], value => value.Action == "identity.mfa.enrollment_confirmed");
@@ -1002,7 +1074,52 @@ public sealed class AuthenticationFlowTests : IClassFixture<AuthenticationFlowFi
     }
 
     [Fact]
-    public async Task PlatformBootstrapAndTenantLifecycleUsesRealPostgreSql18()
+    public async Task DevelopmentPasswordOnlyModeSignsPrivilegedUserInWithoutMfa()
+    {
+        using var factory = _fixture.CreatePasswordOnlyFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost"),
+            AllowAutoRedirect = false
+        });
+        var anonymousSession = await GetSessionAsync(client);
+        Assert.False(anonymousSession.MfaRequired);
+
+        using (var signIn = await PostAsync(
+            client,
+            "/api/v1/auth/sign-in",
+            new
+            {
+                email = AuthenticationFlowFixture.AdminEmail,
+                password = AuthenticationFlowFixture.AdminPassword
+            },
+            anonymousSession.CsrfToken))
+        {
+            Assert.Equal(HttpStatusCode.OK, signIn.StatusCode);
+            var status = await signIn.Content.ReadFromJsonAsync<AuthenticationStatusResponse>();
+            Assert.Equal("authenticated", status?.Status);
+        }
+
+        var authenticatedSession = await GetSessionAsync(client);
+        Assert.True(authenticatedSession.Authenticated);
+        Assert.Equal(SessionClaimTypes.FullStage, authenticatedSession.AuthenticationStage);
+        Assert.False(authenticatedSession.MfaSatisfied);
+        Assert.False(authenticatedSession.MfaRequired);
+
+        using var privilegedRead = await client.GetAsync(
+            $"/api/v1/tenants/{AuthenticationFlowFixture.TenantId}/members");
+        privilegedRead.EnsureSuccessStatusCode();
+    }
+
+    private static async Task<bool> ReceivesStateChangeAsync(
+        DeviceStateChangeBroker.DeviceStateChangeSubscription subscription)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        return await subscription.WaitAsync(timeout.Token);
+    }
+
+    [Fact]
+    public async Task PlatformBootstrapAndTenantLifecycleUsesRealSqlServer2022()
     {
         using var platformClient = _fixture.CreateClient();
         var platformAnonymousSession = await GetSessionAsync(platformClient);
@@ -1183,7 +1300,6 @@ public sealed class AuthenticationFlowTests : IClassFixture<AuthenticationFlowFi
         var multipart = new MultipartFormDataContent
         {
             { new StringContent("Lobby visual"), "Title" },
-            { new StringContent("Png"), "MediaKind" },
             { new ByteArrayContent(fileBytes), "File", "lobby.png" }
         };
         var request = new HttpRequestMessage(HttpMethod.Post, path) { Content = multipart };
@@ -1240,6 +1356,7 @@ public sealed class AuthenticationFlowTests : IClassFixture<AuthenticationFlowFi
     }
 }
 
+[SuppressMessage("Design", "CA1001:Types that own disposable fields should be disposable", Justification = "xUnit invokes IAsyncLifetime.DisposeAsync after the fixture completes.")]
 public sealed class AuthenticationFlowFixture : IAsyncLifetime
 {
     public const string AdminEmail = "admin@example.test";
@@ -1249,12 +1366,8 @@ public sealed class AuthenticationFlowFixture : IAsyncLifetime
     public const string PlatformBootstrapToken = "integration-bootstrap-token-with-strong-entropy";
     public static readonly Guid TenantId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
     private const string RuntimeLogin = "display_control_runtime_test";
-    private static readonly string RuntimePassword = Convert.ToBase64String(RandomNumberGenerator.GetBytes(24));
-    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:18.4-alpine3.24")
-        .WithDatabase("display_control_auth_tests")
-        .WithUsername("postgres")
-        .WithPassword("ephemeral-owner-auth-test-P5h8R2w7")
-        .Build();
+    private const string RuntimePassword = "SqlServer_Auth_Runtime_Test_123!";
+    private readonly SqlServerTestDatabase _database = new("display_control_auth_tests");
     private WebApplicationFactory<Program>? _factory;
     private readonly TestClientCertificateStore _clientCertificateStore = new();
     private readonly AdjustableTimeProvider _timeProvider = new();
@@ -1268,52 +1381,17 @@ public sealed class AuthenticationFlowFixture : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        await _postgres.StartAsync();
-        var ownerOptions = new DbContextOptionsBuilder<DisplayControlDbContext>()
-            .UseNpgsql(_postgres.GetConnectionString())
-            .Options;
+        await _database.StartAsync();
+        var ownerOptions = _database.CreateOwnerOptions();
         await using (var context = new DisplayControlDbContext(ownerOptions, NullTenant.Instance))
         {
             await context.Database.MigrateAsync();
             await SeedAdminAsync(context);
         }
 
-        await using var ownerConnection = new NpgsqlConnection(_postgres.GetConnectionString());
-        await ownerConnection.OpenAsync();
-        await ProvisionRuntimeRoleAsync(ownerConnection);
-
-        var runtimeConnection = new NpgsqlConnectionStringBuilder(_postgres.GetConnectionString())
-        {
-            Username = RuntimeLogin,
-            Password = RuntimePassword,
-            Pooling = true
-        }.ConnectionString;
+        var runtimeConnection = await _database.ProvisionRuntimeLoginAsync(RuntimeLogin, RuntimePassword);
         _runtimeConnection = runtimeConnection;
-        _factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
-        {
-            builder.UseEnvironment("Testing");
-            builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(
-                new Dictionary<string, string?>
-                {
-                    ["ConnectionStrings:Database"] = runtimeConnection,
-                    ["Security:DeviceCertificateAuthority:IssuedLifetimeDays"] = "29",
-                    ["Security:PlatformBootstrapTokenSha256Base64"] = Convert.ToBase64String(
-                        SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(PlatformBootstrapToken)))
-                }));
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<DbContextOptions<DisplayControlDbContext>>();
-                services.AddDbContext<DisplayControlDbContext>(options => options.UseNpgsql(runtimeConnection));
-                services.RemoveAll<TimeProvider>();
-                services.AddSingleton<TimeProvider>(_timeProvider);
-                services.RemoveAll<IDeviceCertificateIssuer>();
-                services.AddSingleton<IDeviceCertificateIssuer>(_deviceCertificateIssuer);
-                services.RemoveAll<PlatformBootstrapCredential>();
-                services.AddSingleton(new PlatformBootstrapCredential(Convert.ToBase64String(
-                    SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(PlatformBootstrapToken)))));
-                services.AddSingleton<IStartupFilter>(new TestClientCertificateStartupFilter(_clientCertificateStore));
-            });
-        });
+        _factory = CreateFactory(runtimeConnection, requireMfa: true);
     }
 
     public void SetDeviceCertificate(string certificatePem)
@@ -1330,6 +1408,45 @@ public sealed class AuthenticationFlowFixture : IAsyncLifetime
             HandleCookies = handleCookies,
             AllowAutoRedirect = false
         });
+
+    public WebApplicationFactory<Program> CreatePasswordOnlyFactory() => CreateFactory(
+        _runtimeConnection ?? throw new InvalidOperationException("Fixture is not initialized."),
+        requireMfa: false);
+
+    private WebApplicationFactory<Program> CreateFactory(string runtimeConnection, bool requireMfa) =>
+        new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Testing");
+            builder.UseSetting("Database:Provider", "SqlServer");
+            builder.UseSetting("ConnectionStrings:Database", runtimeConnection);
+            builder.UseSetting("Security:HumanAuthentication:RequireMfa", requireMfa.ToString());
+            builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    ["ConnectionStrings:Database"] = runtimeConnection,
+                    ["Database:Provider"] = "SqlServer",
+                    ["Security:DeviceCertificateAuthority:IssuedLifetimeDays"] = "29",
+                    ["Security:PlatformBootstrapTokenSha256Base64"] = Convert.ToBase64String(
+                        SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(PlatformBootstrapToken)))
+                }));
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<TimeProvider>();
+                services.AddSingleton<TimeProvider>(_timeProvider);
+                services.RemoveAll<IDeviceCertificateIssuer>();
+                services.AddSingleton<IDeviceCertificateIssuer>(_deviceCertificateIssuer);
+                services.RemoveAll<PlatformBootstrapCredential>();
+                services.AddSingleton(new PlatformBootstrapCredential(Convert.ToBase64String(
+                    SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(PlatformBootstrapToken)))));
+                services.AddSingleton<IStartupFilter>(new TestClientCertificateStartupFilter(_clientCertificateStore));
+            });
+        });
+
+    public DeviceStateChangeBroker.DeviceStateChangeSubscription SubscribeDeviceStateChanges(
+        Guid tenantId,
+        Guid deviceId) => (_factory ?? throw new InvalidOperationException("Fixture is not initialized."))
+        .Services.GetRequiredService<DeviceStateChangeBroker>()
+        .Subscribe(tenantId, deviceId);
 
     public bool VerifyPlatformBootstrapToken(string token) =>
         (_factory ?? throw new InvalidOperationException("Fixture is not initialized."))
@@ -1357,7 +1474,9 @@ public sealed class AuthenticationFlowFixture : IAsyncLifetime
                 ClientCertificateMode = ClientCertificateMode.AllowCertificate,
                 ClientCertificateValidation = static (_, _, _) => true
             })));
-        builder.Services.AddDbContext<DisplayControlDbContext>(options => options.UseNpgsql(runtimeConnection));
+        builder.Services.AddDbContext<DisplayControlDbContext>(options => options.UseSqlServer(
+            runtimeConnection,
+            sqlServer => sqlServer.MigrationsAssembly(SqlServerTestDatabase.MigrationsAssembly)));
         builder.Services.AddScoped<ScopedTenantContext>();
         builder.Services.AddScoped<ICurrentTenant>(services => services.GetRequiredService<ScopedTenantContext>());
         builder.Services.AddSingleton<IDeviceCertificateIssuer>(_deviceCertificateIssuer);
@@ -1433,12 +1552,13 @@ public sealed class AuthenticationFlowFixture : IAsyncLifetime
 
         _clientCertificateStore.Certificate?.Dispose();
 
-        await _postgres.DisposeAsync();
+        await _database.DisposeAsync();
     }
 
     private static async Task SeedAdminAsync(DisplayControlDbContext context)
     {
         var nowUtc = new DateTimeOffset(2026, 8, 15, 12, 0, 0, TimeSpan.Zero);
+        await using var transaction = await context.BeginTenantTransactionAsync(TenantId);
         var user = new ApplicationUser
         {
             Id = Guid.Parse("11111111-1111-1111-1111-111111111111"),
@@ -1468,6 +1588,7 @@ public sealed class AuthenticationFlowFixture : IAsyncLifetime
             user.Id,
             nowUtc));
         await context.SaveChangesAsync();
+        await transaction.CommitAsync();
     }
 
     private static X509Certificate2 CreateLoopbackServerCertificate()
@@ -1499,36 +1620,6 @@ public sealed class AuthenticationFlowFixture : IAsyncLifetime
             certificate.Export(X509ContentType.Pkcs12),
             password: null,
             X509KeyStorageFlags.Exportable);
-    }
-
-    private static async Task ProvisionRuntimeRoleAsync(NpgsqlConnection connection)
-    {
-        const string sql =
-            """
-            CREATE ROLE display_control_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
-            CREATE ROLE display_control_runtime_test LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-            GRANT display_control_runtime TO display_control_runtime_test;
-            GRANT USAGE ON SCHEMA app TO display_control_runtime;
-            GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA app TO display_control_runtime;
-            GRANT SELECT ON app.identity_role_claims, app.identity_roles, app.system_key_metadata TO display_control_runtime;
-            GRANT SELECT, INSERT, UPDATE ON app.tenants TO display_control_runtime;
-            GRANT SELECT, INSERT ON app.audit_events, app.device_heartbeats, app.device_synchronization_events, app.license_events TO display_control_runtime;
-            GRANT SELECT, INSERT, UPDATE ON app.content_assets, app.content_versions, app.desired_state_assets, app.desired_states, app.device_certificates, app.devices, app.enrollment_tokens, app.identity_users, app.invitations, app.licenses, app.playlists, app.playlist_versions, app.tenant_memberships TO display_control_runtime;
-            GRANT SELECT, INSERT, UPDATE, DELETE ON app.device_assignments, app.device_group_members, app.device_groups, app.device_network_interfaces, app.group_assignments, app.identity_user_claims, app.identity_user_logins, app.identity_user_roles, app.identity_user_tokens, app.identity_notifications, app.outbox_messages, app.playlist_items, app.user_mfa_secrets, app.user_recovery_codes, app.user_sessions TO display_control_runtime;
-            REVOKE SELECT, UPDATE, DELETE ON app.identity_notifications FROM display_control_runtime;
-            """;
-        await using (var command = new NpgsqlCommand(sql, connection))
-        {
-            await command.ExecuteNonQueryAsync();
-        }
-
-        const string quoteSql = "SELECT format('ALTER ROLE display_control_runtime_test PASSWORD %L', @password)";
-        await using var quoteCommand = new NpgsqlCommand(quoteSql, connection);
-        quoteCommand.Parameters.AddWithValue("password", RuntimePassword);
-        var passwordDdl = (string?)await quoteCommand.ExecuteScalarAsync()
-            ?? throw new InvalidOperationException("PostgreSQL did not produce password DDL.");
-        await using var passwordCommand = new NpgsqlCommand(passwordDdl, connection);
-        await passwordCommand.ExecuteNonQueryAsync();
     }
 
     private sealed class NullTenant : ICurrentTenant

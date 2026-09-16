@@ -1,5 +1,6 @@
 using System.Security.Claims;
 
+using DisplayControl.Api.Security;
 using DisplayControl.Application.Security;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authorization;
@@ -10,7 +11,9 @@ namespace DisplayControl.Api.Controllers;
 [ApiController]
 [AllowAnonymous]
 [Route("api/v1/session")]
-public sealed class SessionController(IAntiforgery antiforgery) : ControllerBase
+public sealed class SessionController(
+    IAntiforgery antiforgery,
+    HumanAuthenticationOptions humanAuthenticationOptions) : ControllerBase
 {
     [HttpGet]
     [ProducesResponseType<SessionResponse>(StatusCodes.Status200OK)]
@@ -27,7 +30,8 @@ public sealed class SessionController(IAntiforgery antiforgery) : ControllerBase
             isAuthenticated ? User.FindFirstValue(SessionClaimTypes.DisplayName) : null,
             isAuthenticated ? User.FindFirstValue(SessionClaimTypes.TenantId) : null,
             isAuthenticated ? User.FindFirstValue(SessionClaimTypes.TenantRole) : null,
-            isAuthenticated && User.HasClaim(SessionClaimTypes.AuthenticationMethod, "mfa")));
+            isAuthenticated && User.HasClaim(SessionClaimTypes.AuthenticationMethod, "mfa"),
+            humanAuthenticationOptions.RequireMfa));
     }
 }
 
@@ -40,4 +44,5 @@ public sealed record SessionResponse(
     string? DisplayName,
     string? TenantId,
     string? TenantRole,
-    bool MfaSatisfied);
+    bool MfaSatisfied,
+    bool MfaRequired);

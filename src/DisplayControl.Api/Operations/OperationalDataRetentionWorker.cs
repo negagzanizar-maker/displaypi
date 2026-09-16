@@ -1,5 +1,5 @@
 using System.Data;
-using Npgsql;
+using Microsoft.Data.SqlClient;
 
 namespace DisplayControl.Api.Operations;
 
@@ -30,8 +30,8 @@ public sealed record OperationalDataRetentionOptions(
                 "Enabled retention requires a maintenance connection and valid retention, interval, and batch limits.");
         }
 
-        var connectionBuilder = new NpgsqlConnectionStringBuilder(connectionString);
-        if (!string.Equals(connectionBuilder.Username, "display_control_maintenance", StringComparison.Ordinal))
+        var connectionBuilder = new SqlConnectionStringBuilder(connectionString);
+        if (!string.Equals(connectionBuilder.UserID, "display_control_maintenance", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
                 "ConnectionStrings:MaintenanceDatabase must use the dedicated display_control_maintenance login.");
@@ -127,11 +127,11 @@ public sealed class OperationalDataRetentionWorker(
         DateTimeOffset cutoffUtc,
         CancellationToken cancellationToken)
     {
-        await using var connection = new NpgsqlConnection(options.DatabaseConnectionString);
+        await using var connection = new SqlConnection(options.DatabaseConnectionString);
         await connection.OpenAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
-        await using (var contextCommand = new NpgsqlCommand(
-            "SELECT set_config('app.data_retention', 'true', true)",
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        await using (var contextCommand = new SqlCommand(
+            "EXEC sys.sp_set_session_context @key=N'data_retention', @value=1, @read_only=0",
             connection,
             transaction))
         {
@@ -140,16 +140,10 @@ public sealed class OperationalDataRetentionWorker(
 
         var sql =
             $"""
-             DELETE FROM app.{table}
-             WHERE id IN (
-                 SELECT id
-                 FROM app.{table}
-                 WHERE {timestampColumn} < @cutoff
-                 ORDER BY {timestampColumn}, id
-                 LIMIT @batch_size
-             )
+             DELETE TOP (@batch_size) FROM app.{table}
+             WHERE {timestampColumn} < @cutoff
              """;
-        await using var command = new NpgsqlCommand(sql, connection, transaction);
+        await using var command = new SqlCommand(sql, connection, transaction);
         command.Parameters.AddWithValue("cutoff", cutoffUtc);
         command.Parameters.AddWithValue("batch_size", options.BatchSize);
         var deleted = await command.ExecuteNonQueryAsync(cancellationToken);

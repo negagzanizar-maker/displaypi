@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import './App.css'
 
 interface PlayerManifestAsset {
@@ -7,6 +7,9 @@ interface PlayerManifestAsset {
   mediaKind: 'plainText' | 'jpeg' | 'png' | 'webP' | 'mp4'
   durationMilliseconds: number | null
   loopVideo: boolean
+  captionContentVersionId?: string | null
+  captionText?: string | null
+  isCaption?: boolean
   url: string
 }
 
@@ -32,6 +35,17 @@ interface PlayerStateResponse {
 }
 
 const safeDefault: PlayerPresentation = { kind: 'notLicensed' }
+const linkedContentPrefix = 'display-control-url:v1\n'
+
+function readLinkedContent(value: string) {
+  if (!value.startsWith(linkedContentPrefix)) return null
+  try {
+    const url = new URL(value.slice(linkedContentPrefix.length).trim())
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null
+  } catch {
+    return null
+  }
+}
 
 export interface AppProps {
   presentation?: PlayerPresentation
@@ -75,8 +89,9 @@ async function loadPresentation(signal: AbortSignal): Promise<PlayerPresentation
   }
 }
 
-function PlainTextAsset({ url, onFailure, onPlaying }: { url: string; onFailure: () => void; onPlaying: () => void }) {
+function PlainTextAsset({ className = 'text-content', url, onFailure, onPlaying }: { className?: string; url: string; onFailure: () => void; onPlaying: () => void }) {
   const [text, setText] = useState('')
+  const linkedUrl = className === 'caption-content' ? null : readLinkedContent(text)
 
   useEffect(() => {
     const abort = new AbortController()
@@ -85,19 +100,44 @@ function PlainTextAsset({ url, onFailure, onPlaying }: { url: string; onFailure:
         if (!response.ok) throw new Error('text-asset-unavailable')
         return response.text()
       })
-      .then((value) => { if (!abort.signal.aborted) { setText(value); onPlaying() } })
+      .then((value) => { if (!abort.signal.aborted) { setText(value); if (!readLinkedContent(value)) onPlaying() } })
       .catch(() => { if (!abort.signal.aborted) onFailure() })
     return () => abort.abort()
   }, [url, onFailure, onPlaying])
 
-  return <pre className="text-content">{text}</pre>
+  return className === 'caption-content'
+    ? <TickerText text={text} />
+    : linkedUrl
+      ? <iframe className="web-content" src={linkedUrl} title="Linked web content" sandbox="allow-forms allow-scripts allow-same-origin" referrerPolicy="no-referrer" onLoad={onPlaying} onError={onFailure} />
+      : <pre className={className}>{text}</pre>
+}
+
+function TickerText({ text }: { text: string }) {
+  const viewport = useRef<HTMLDivElement>(null)
+  const content = useRef<HTMLSpanElement>(null)
+  const [scrolling, setScrolling] = useState(false)
+
+  useLayoutEffect(() => {
+    const measure = () => setScrolling((content.current?.scrollWidth ?? 0) > (viewport.current?.clientWidth ?? 0))
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    if (viewport.current) observer.observe(viewport.current)
+    if (content.current) observer.observe(content.current)
+    return () => observer.disconnect()
+  }, [text])
+
+  return <div className={`caption-content${scrolling ? ' is-scrolling' : ''}`} ref={viewport}>
+    <div className="caption-track"><span ref={content}>{text}</span>{scrolling && <span aria-hidden="true">{text}</span>}</div>
+  </div>
 }
 
 function PlaylistPlayer({ manifest }: { manifest: PlayerManifest }) {
   const [position, setPosition] = useState(0)
   const [cycle, setCycle] = useState(0)
   const [failed, setFailed] = useState(false)
-  const assets = [...manifest.assets].sort((left, right) => left.position - right.position)
+  const allAssets = [...manifest.assets].sort((left, right) => left.position - right.position)
+  const assets = allAssets.filter((item) => !item.isCaption)
   const asset = assets[position % assets.length]
   const advance = useCallback(() => {
     setFailed(false)
@@ -154,6 +194,17 @@ function PlaylistPlayer({ manifest }: { manifest: PlayerManifest }) {
     media = <img key={`${asset.contentVersionId}-${cycle}`} className="visual-content" src={asset.url} alt="" onError={fail} onLoad={playing} />
   }
 
+  const caption = asset.captionContentVersionId
+    ? allAssets.find((item) => item.isCaption && item.contentVersionId === asset.captionContentVersionId)
+    : undefined
+  const supportsCaption = ['jpeg', 'png', 'webP', 'mp4'].includes(asset.mediaKind)
+  if (supportsCaption && (caption || asset.captionText)) {
+    const captionDisplay = asset.captionText
+      ? <TickerText text={asset.captionText} />
+      : caption && <PlainTextAsset className="caption-content" key={`${caption.contentVersionId}-${cycle}`} url={caption.url} onFailure={fail} onPlaying={playing} />
+    media = <div className="composite-content">{media}{captionDisplay}</div>
+  }
+
   return <main className="playback-screen">{failed ? <p role="status">Media unavailable. Retrying…</p> : media}</main>
 }
 
@@ -176,7 +227,9 @@ function App({ presentation }: AppProps) {
         if (active) setAgentPresentation(safeDefault)
       } finally {
         window.clearTimeout(timeout)
-        if (active) poll = window.setTimeout(() => void load(), 5_000)
+        // The agent's local state is authoritative; poll it frequently so a completed
+        // push-triggered synchronization switches the kiosk without a browser refresh.
+        if (active) poll = window.setTimeout(() => void load(), 1_000)
       }
     }
 

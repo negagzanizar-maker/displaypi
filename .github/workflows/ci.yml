@@ -68,7 +68,7 @@ jobs:
         run: |
           dotnet format DisplayControl.slnx --verify-no-changes --no-restore
           dotnet tool restore
-          dotnet ef migrations has-pending-model-changes --project src/DisplayControl.Infrastructure/DisplayControl.Infrastructure.csproj --context DisplayControlDbContext --configuration Release --no-build
+          dotnet ef migrations has-pending-model-changes --project src/DisplayControl.SqlServerMigrations/DisplayControl.SqlServerMigrations.csproj --startup-project src/DisplayControl.Api/DisplayControl.Api.csproj --context DisplayControlDbContext --configuration Release --no-build
 
       - name: Test .NET
         run: dotnet test DisplayControl.slnx --configuration Release --no-build --no-restore --logger "trx;LogFilePrefix=tests" --results-directory artifacts/test-results
@@ -99,10 +99,9 @@ jobs:
 
       - name: Validate local service definition
         env:
-          POSTGRES_DB: display_control_ci
-          POSTGRES_USER: display_control_ci
-          POSTGRES_PASSWORD: ci-configuration-validation-only
-          POSTGRES_PORT: "5432"
+          MSSQL_PID: Developer
+          MSSQL_SA_PASSWORD: ci-configuration-validation-only-123!
+          SQLSERVER_APP_PASSWORD: ci-runtime-validation-only-123!
         run: docker compose config --quiet
 
       - name: Upload test results

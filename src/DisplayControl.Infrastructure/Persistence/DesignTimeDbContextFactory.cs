@@ -9,11 +9,11 @@ public sealed class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<Dis
     public DisplayControlDbContext CreateDbContext(string[] args)
     {
         var connectionString = Environment.GetEnvironmentVariable("DISPLAYCONTROL_MIGRATION_CONNECTION")
-            ?? "Host=127.0.0.1;Port=5432;Database=display_control_design;Username=design_only;Password=not-used-for-model-generation";
+            ?? "Server=127.0.0.1,14333;Database=display_control_design;User Id=sa;Password=NotUsedForModelGeneration123!;TrustServerCertificate=True";
 
         var options = new DbContextOptionsBuilder<DisplayControlDbContext>()
-            .UseNpgsql(connectionString, npgsql =>
-                npgsql.MigrationsAssembly(typeof(DisplayControlDbContext).Assembly.FullName))
+            .UseSqlServer(connectionString, sqlServer =>
+                sqlServer.MigrationsAssembly("DisplayControl.SqlServerMigrations"))
             .Options;
 
         return new DisplayControlDbContext(options, NullTenantContext.Instance);

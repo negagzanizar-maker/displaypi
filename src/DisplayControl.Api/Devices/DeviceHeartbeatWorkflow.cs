@@ -7,8 +7,8 @@ using DisplayControl.Application.Security;
 using DisplayControl.Domain.Devices;
 using DisplayControl.Domain.Licensing;
 using DisplayControl.Infrastructure.Persistence;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
 
 namespace DisplayControl.Api.Devices;
 
@@ -40,6 +40,7 @@ public sealed class DeviceHeartbeatWorkflow(
         CancellationToken cancellationToken)
     {
         if (request.BootId == Guid.Empty ||
+            request.CurrentContentVersionId == Guid.Empty ||
             !DeviceInventoryNormalizer.TryNormalize(request.NetworkInterfaces, out var normalizedInterfaces) ||
             request.ReportedSentAtUtc is { Offset: var reportedOffset } && reportedOffset != TimeSpan.Zero)
         {
@@ -51,7 +52,7 @@ public sealed class DeviceHeartbeatWorkflow(
         var requestSha256 = SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(request));
         var idempotencyLockKey = $"heartbeat:{deviceId:N}:{request.BootId:N}";
         await dbContext.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT pg_advisory_xact_lock(hashtextextended({idempotencyLockKey}, 0))",
+            $"EXEC sys.sp_getapplock @Resource={idempotencyLockKey}, @LockMode=N'Exclusive', @LockOwner=N'Transaction', @LockTimeout=-1",
             cancellationToken);
         var priorHeartbeat = await dbContext.DeviceHeartbeats.AsNoTracking().SingleOrDefaultAsync(
             value => value.DeviceId == deviceId && value.BootId == request.BootId && value.Sequence == request.Sequence,
@@ -104,7 +105,8 @@ public sealed class DeviceHeartbeatWorkflow(
             request.AgentVersion,
             request.PlayerVersion,
             request.DiskCapacityBytes,
-            networkInterfaces = normalizedInterfaces
+            networkInterfaces = normalizedInterfaces,
+            request.CurrentContentVersionId
         });
         var heartbeatRecord = new DeviceHeartbeat(
             Guid.NewGuid(),
@@ -212,7 +214,7 @@ public sealed class DeviceHeartbeatWorkflow(
             return true;
         }
         catch (DbUpdateException exception) when (
-            exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+            exception.InnerException is SqlException { Number: 2601 or 2627 })
         {
             return false;
         }

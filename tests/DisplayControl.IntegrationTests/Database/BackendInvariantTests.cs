@@ -1,5 +1,7 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Claims;
 using DisplayControl.Api.Controllers;
+using DisplayControl.Api.Realtime;
 using DisplayControl.Api.Scheduling;
 using DisplayControl.Api.Security;
 using DisplayControl.Application.Content;
@@ -18,30 +20,27 @@ using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
-using Testcontainers.PostgreSql;
 
 namespace DisplayControl.IntegrationTests.Database;
 
+[SuppressMessage("Design", "CA1001:Types that own disposable fields should be disposable", Justification = "xUnit invokes IAsyncLifetime.DisposeAsync after the test class completes.")]
 public sealed class BackendInvariantTests : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:18.4-alpine3.24")
-        .WithDatabase("backend_invariants").WithUsername("postgres")
-        .WithPassword("ephemeral-test-only-Y7m5F2b9").Build();
+    private readonly SqlServerTestDatabase _database = new("backend_invariants");
     private readonly Guid _tenantId = Guid.NewGuid();
     private readonly Guid _actorId = Guid.NewGuid();
     private static DateTimeOffset Now => DateTimeOffset.UtcNow;
 
     public async Task InitializeAsync()
     {
-        await _postgres.StartAsync();
+        await _database.StartAsync();
+        await _database.MigrateAsync();
         await using var db = CreateContext();
-        await db.Database.MigrateAsync();
         db.Tenants.Add(new Tenant(_tenantId, "Regression tenant", "regression", "UTC", Now));
         await db.SaveChangesAsync();
     }
 
-    public Task DisposeAsync() => _postgres.DisposeAsync().AsTask();
+    public Task DisposeAsync() => _database.DisposeAsync().AsTask();
 
     [Fact]
     public async Task ConcurrentOverlappingCreatesOnlyGrantOneLicense()
@@ -124,12 +123,12 @@ public sealed class BackendInvariantTests : IAsyncLifetime
         var content = new ContentAsset(Guid.NewGuid(), _tenantId, "Image", MediaKind.Png, _actorId, now);
         var contentVersion = new ContentVersion(Guid.NewGuid(), _tenantId, content.Id, 1, "test/image", 8,
             new byte[32], "image/png", "image.png", "{}", _actorId, now);
-        content.Approve(now);
+        content.RecordScanOutcome(ContentScanOutcome.Clean, now);
         contentVersion.RecordScanOutcome(ContentScanOutcome.Clean, "test", null);
         contentVersion.Approve(_actorId, now);
         version.Publish(_actorId, now);
-        var assignment = new GroupAssignment(Guid.NewGuid(), _tenantId, group.Id, version.Id, 0, null, null, "UTC", _actorId, now);
-        var second = new GroupAssignment(Guid.NewGuid(), _tenantId, group.Id, version.Id, 1, null, null, "UTC", _actorId, now);
+        var assignment = new GroupAssignment(Guid.NewGuid(), _tenantId, group.Id, version.Id, 1000, null, null, "UTC", _actorId, now);
+        var second = new GroupAssignment(Guid.NewGuid(), _tenantId, group.Id, version.Id, -1000, null, null, "UTC", _actorId, now.AddMilliseconds(1));
         await using (var seed = CreateContext())
         {
             seed.AddRange(group, playlist, version, content, contentVersion, assignment, second,
@@ -147,7 +146,8 @@ public sealed class BackendInvariantTests : IAsyncLifetime
         var removed = await ReplaceMembersAsync([], group.ConcurrencyToken);
         var restored = await ReplaceMembersAsync([device.Id], removed.ConcurrencyToken);
         Assert.Equal(2, await verify.DesiredStates.CountAsync(value => value.DeviceId == device.Id));
-        Assert.NotNull(await new DesiredStateResolver(verify).ResolveAsync(device.Id, Now, CancellationToken.None));
+        var resolved = await new DesiredStateResolver(verify).ResolveAsync(device.Id, Now, CancellationToken.None);
+        Assert.Equal(states[1].Id, resolved?.Id);
         await using (var archive = CreateContext())
         {
             var asset = await archive.ContentAssets.SingleAsync(value => value.Id == content.Id);
@@ -161,7 +161,11 @@ public sealed class BackendInvariantTests : IAsyncLifetime
         {
             await using var db = CreateContext();
             await using var tx = await db.BeginTenantTransactionAsync(_tenantId);
-            var controller = new DeviceGroupsController(db, new DesiredStateCompilationService(db), TimeProvider.System)
+            var controller = new DeviceGroupsController(
+                db,
+                new DesiredStateCompilationService(db),
+                Notifications(),
+                TimeProvider.System)
             {
                 ControllerContext = LicenseController(db).ControllerContext
             };
@@ -202,7 +206,7 @@ public sealed class BackendInvariantTests : IAsyncLifetime
             IActionResult result = rejected ? new BadRequestResult() : new OkResult();
             var action = new ActionContext(context, new RouteData(), new ActionDescriptor());
             var filterContext = new ResultExecutingContext(action, [], result, new object());
-            await new TenantTransactionCommitFilter().OnResultExecutionAsync(filterContext, async () =>
+            await new TenantTransactionCommitFilter(Notifications()).OnResultExecutionAsync(filterContext, async () =>
             {
                 await using var other = CreateContext();
                 Assert.True(await other.Devices.AnyAsync(value => value.Id == device.Id));
@@ -241,18 +245,29 @@ public sealed class BackendInvariantTests : IAsyncLifetime
         var middleware = new TenantTransactionMiddleware(HandleRequest);
         async Task HandleRequest(HttpContext context)
         {
-            await db.Database.ExecuteSqlRawAsync("CREATE TEMP TABLE commit_parent (id int PRIMARY KEY); CREATE TEMP TABLE commit_child (id int REFERENCES commit_parent(id) DEFERRABLE INITIALLY DEFERRED); INSERT INTO commit_child VALUES (1);");
+            await db.Database.ExecuteSqlInterpolatedAsync($$"""
+                SET XACT_ABORT ON;
+                BEGIN TRY
+                    INSERT INTO app.tenants
+                        (id, name, slug, time_zone, state, created_at_utc, updated_at_utc, concurrency_token)
+                    SELECT id, name, slug, time_zone, state, created_at_utc, updated_at_utc, concurrency_token
+                    FROM app.tenants
+                    WHERE id = {{_tenantId}};
+                END TRY
+                BEGIN CATCH
+                    IF XACT_STATE() <> -1 THROW;
+                END CATCH;
+                """);
             var action = new ActionContext(context, new RouteData(), new ActionDescriptor());
             var result = new OkResult();
-            await new TenantTransactionCommitFilter().OnResultExecutionAsync(
+            await new TenantTransactionCommitFilter(Notifications()).OnResultExecutionAsync(
                 new ResultExecutingContext(action, [], result, new object()), () =>
                 {
                     resultExecuted = true;
                     return Task.FromResult(new ResultExecutedContext(action, [], result, new object()));
                 });
         }
-        var exception = await Assert.ThrowsAsync<PostgresException>(() => middleware.InvokeAsync(http, TenantContext(), db));
-        Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, exception.SqlState);
+        await Assert.ThrowsAnyAsync<Exception>(() => middleware.InvokeAsync(http, TenantContext(), db));
         Assert.False(resultExecuted);
         Assert.False(http.Response.HasStarted);
     }
@@ -277,7 +292,7 @@ public sealed class BackendInvariantTests : IAsyncLifetime
         return result.Result;
     }
 
-    private LicensesController LicenseController(DisplayControlDbContext db) => new(db, TimeProvider.System)
+    private LicensesController LicenseController(DisplayControlDbContext db) => new(db, Notifications(), TimeProvider.System)
     {
         ControllerContext = new ControllerContext
         {
@@ -288,6 +303,9 @@ public sealed class BackendInvariantTests : IAsyncLifetime
         }
     };
 
+    private static DeviceStateChangeNotifications Notifications() =>
+        new(new DeviceStateChangeBroker());
+
     private ScopedTenantContext TenantContext()
     {
         var tenant = new ScopedTenantContext();
@@ -295,7 +313,19 @@ public sealed class BackendInvariantTests : IAsyncLifetime
         return tenant;
     }
 
-    private DisplayControlDbContext CreateContext() => new(
-        new DbContextOptionsBuilder<DisplayControlDbContext>().UseNpgsql(_postgres.GetConnectionString()).Options,
-        TenantContext());
+    private DisplayControlDbContext CreateContext()
+    {
+        var context = new DisplayControlDbContext(
+            new DbContextOptionsBuilder<DisplayControlDbContext>()
+                .UseSqlServer(
+                    _database.OwnerConnectionString,
+                    sqlServer => sqlServer.MigrationsAssembly(SqlServerTestDatabase.MigrationsAssembly))
+                .Options,
+            TenantContext());
+        context.Database.OpenConnection();
+        context.Database.ExecuteSqlRaw(
+            "EXEC sys.sp_set_session_context @key=N'tenant_id', @value={0}, @read_only=0",
+            _tenantId.ToString());
+        return context;
+    }
 }

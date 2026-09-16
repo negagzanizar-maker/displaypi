@@ -17,7 +17,7 @@ public sealed class ContentFileInspectorTests
         BinaryPrimitives.WriteUInt32BigEndian(png.AsSpan(20, 4), 1080);
         await using var stream = new MemoryStream(png);
 
-        var result = await ContentFileInspector.InspectAsync(stream, png.Length, MediaKind.Png);
+        var result = await ContentFileInspector.InspectAsync(stream, png.Length);
 
         Assert.Equal(MediaKind.Png, result.MediaKind);
         Assert.Equal("image/png", result.MimeType);
@@ -26,13 +26,15 @@ public sealed class ContentFileInspectorTests
     }
 
     [Fact]
-    public async Task RejectsDeclaredKindThatDoesNotMatchMagicBytes()
+    public async Task DetectsValidUtf8TextWithoutADeclaredKind()
     {
         var bytes = Encoding.UTF8.GetBytes("ordinary UTF-8 text");
         await using var stream = new MemoryStream(bytes);
 
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
-            ContentFileInspector.InspectAsync(stream, bytes.Length, MediaKind.Png));
+        var result = await ContentFileInspector.InspectAsync(stream, bytes.Length);
+
+        Assert.Equal(MediaKind.PlainText, result.MediaKind);
+        Assert.Equal("text/plain; charset=utf-8", result.MimeType);
     }
 
     [Fact]
@@ -42,6 +44,6 @@ public sealed class ContentFileInspectorTests
         await using var stream = new MemoryStream(bytes);
 
         await Assert.ThrowsAsync<InvalidDataException>(() =>
-            ContentFileInspector.InspectAsync(stream, bytes.Length, MediaKind.PlainText));
+            ContentFileInspector.InspectAsync(stream, bytes.Length));
     }
 }

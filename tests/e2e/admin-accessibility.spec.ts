@@ -11,6 +11,7 @@ const anonymousSession = {
   tenantId: null,
   tenantRole: null,
   mfaSatisfied: false,
+  mfaRequired: true,
 }
 
 const platformSession = {
@@ -22,6 +23,7 @@ const platformSession = {
   email: 'platform@example.test',
   displayName: 'Platform Admin',
   mfaSatisfied: true,
+  mfaRequired: true,
 }
 
 async function fulfilJson(route: Route, body: unknown, status = 200) {
@@ -53,7 +55,11 @@ test('mobile viewer navigation links resolve to visible sections', async ({ page
   await expect(navigation).toBeVisible()
   await expect(navigation.getByRole('link', { name: 'Utilisateurs' })).toHaveCount(0)
   const targets = await navigation.getByRole('link').evaluateAll((links) => links.map((link) => link.getAttribute('href')!))
-  for (const target of targets) await expect(page.locator(target)).toBeVisible()
+  for (const target of targets) {
+    await navigation.locator(`a[href="${target}"]`).click()
+    const renderedTarget = target === '#account-security' ? target : `#view-${target.slice(1)}`
+    await expect(page.locator(renderedTarget)).toBeVisible()
+  }
 })
 
 test('MFA step-up refreshes CSRF before the next account mutation', async ({ page }) => {

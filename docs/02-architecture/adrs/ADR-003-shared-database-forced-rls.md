@@ -1,6 +1,6 @@
 # ADR-003 — Shared PostgreSQL with forced Row-Level Security
 
-- Status: Accepted
+- Status: Superseded by ADR-007
 - Date: 2026-08-15
 
 ## Context

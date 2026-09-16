@@ -148,7 +148,7 @@ public sealed class DeviceLicense : TenantOwnedEntity
         LatestIssuedLeaseExpiryUtc = LatestIssuedLeaseExpiryUtc is { } outstanding && outstanding > leaseExpiresAtUtc
             ? outstanding
             : leaseExpiresAtUtc;
-        Touch(issuedAtUtc);
+        TouchLeaseTelemetry(issuedAtUtc);
     }
 
     private void EnsureNotRevoked()
@@ -161,12 +161,17 @@ public sealed class DeviceLicense : TenantOwnedEntity
 
     private void Touch(DateTimeOffset updatedAtUtc)
     {
+        TouchLeaseTelemetry(updatedAtUtc);
+        ConcurrencyToken = Guid.NewGuid();
+    }
+
+    private void TouchLeaseTelemetry(DateTimeOffset updatedAtUtc)
+    {
         if (updatedAtUtc.Offset != TimeSpan.Zero || updatedAtUtc < UpdatedAtUtc)
         {
             throw new ArgumentException("Licence timestamps must be monotonic UTC instants.", nameof(updatedAtUtc));
         }
 
         UpdatedAtUtc = updatedAtUtc;
-        ConcurrencyToken = Guid.NewGuid();
     }
 }

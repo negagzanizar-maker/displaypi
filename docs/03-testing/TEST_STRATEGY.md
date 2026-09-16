@@ -4,14 +4,14 @@
 
 Testing is part of implementation, not a final demonstration step. The strategy must prove functional behavior, tenant isolation, authentication/authorization, device identity, licence enforcement, content integrity, resilience, deployment, and real Raspberry Pi operation at the scope of each requirement.
 
-Passing a mocked unit test cannot prove a real trust boundary such as PostgreSQL RLS, TLS client authentication, object-storage privacy, backup recovery, or physical kiosk operation.
+Passing a mocked unit test cannot prove a real trust boundary such as SQL Server RLS, TLS client authentication, object-storage privacy, backup recovery, or physical kiosk operation.
 
 ## 2. Test environments
 
 | ID | Environment | Required evidence |
 |---|---|---|
 | ENV-DEV | Developer workstation, Docker Compose, deterministic fake clock/hardware adapters | Fast developer tests and reproducible setup |
-| ENV-CI | Clean Linux runner, pinned SDKs/images, PostgreSQL 18 and real dependency containers | Build, static, unit, component, integration reports |
+| ENV-CI | Clean runner, pinned SDKs/images, SQL Server 2022 and real dependency containers | Build, static, unit, component, integration reports |
 | ENV-INT | Complete isolated stack with test CA, TLS path, private storage, scanner and database | Real protocol/security boundary tests |
 | ENV-STG | Production-equivalent public deployment with real DNS/TLS and synthetic data | E2E, DAST, load, resilience and release acceptance |
 | ENV-PI | Physical Pi 4 and Pi 5, 64-bit Raspberry Pi OS, monitors, Ethernet and Wi-Fi | Hardware, playback, reboot, network and soak records |
@@ -54,9 +54,9 @@ Test data is synthetic and includes at least two tenants, every role, multiple d
 - Kiosk licensed, offline, synchronizing, no-content, not-licensed and playback-fault states
 - Keyboard operation, focus, semantics, contrast and automated accessibility checks
 
-### 3.4 Backend and PostgreSQL integration tests
+### 3.4 Backend and SQL Server integration tests
 
-Use the real PostgreSQL 18 major version, ASP.NET test hosting, and real middleware configuration:
+Use the real SQL Server 2022 major version, ASP.NET test hosting, and real middleware configuration:
 
 - migrations from clean and previous schema;
 - RLS default deny and `FORCE ROW LEVEL SECURITY`;
@@ -95,7 +95,7 @@ Playwright covers the critical journeys of each role:
 
 Hidden buttons are not evidence; E2E/API tests invoke forbidden routes directly.
 
-The fast browser suite in `tests/e2e` uses deterministic Playwright route interception for UI state, request-shape, CSRF and fail-closed player checks. It also runs axe against the covered administration and player views. These tests are a browser boundary gate, not evidence for the complete live API/PostgreSQL journey listed above; that journey runs separately in staging with real services.
+The fast browser suite in `tests/e2e` uses deterministic Playwright route interception for UI state, request-shape, CSRF and fail-closed player checks. It also runs axe against the covered administration and player views. These tests are a browser boundary gate, not evidence for the complete live API/SQL Server journey listed above; that journey runs separately in staging with real services.
 
 ### 3.7 Security, resilience, load, and recovery tests
 
@@ -133,7 +133,7 @@ Short non-production leases test physical expiry quickly. Deterministic clock te
 Approved baseline test frameworks:
 
 - xUnit and ASP.NET Core test hosting
-- Testcontainers for PostgreSQL and other real dependencies
+- Testcontainers for SQL Server 2022 and other real dependencies
 - Vitest and React Testing Library
 - Playwright
 - axe-core for accessibility automation

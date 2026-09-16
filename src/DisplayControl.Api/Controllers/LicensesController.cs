@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using System.Text.Json;
 using DisplayControl.Api.Pagination;
+using DisplayControl.Api.Realtime;
 using DisplayControl.Api.Security;
 using DisplayControl.Domain.Devices;
 using DisplayControl.Domain.Licensing;
@@ -9,8 +10,8 @@ using DisplayControl.Domain.Operations;
 using DisplayControl.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
 
 namespace DisplayControl.Api.Controllers;
 
@@ -18,6 +19,7 @@ namespace DisplayControl.Api.Controllers;
 [Route("api/v1/tenants/{tenantId:guid}/licenses")]
 public sealed class LicensesController(
     DisplayControlDbContext dbContext,
+    DeviceStateChangeNotifications notifications,
     TimeProvider timeProvider) : ControllerBase
 {
     [HttpGet]
@@ -124,11 +126,12 @@ public sealed class LicensesController(
             await dbContext.SaveChangesAsync(cancellationToken);
         }
         catch (DbUpdateException exception) when (
-            exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+            exception.InnerException is SqlException { Number: 2601 or 2627 })
         {
             return ConflictProblem("license_conflict", "The licence conflicts with another operation.");
         }
 
+        notifications.Enqueue(tenantId, request.DeviceId);
         return Created(
             $"/api/v1/tenants/{tenantId}/licenses/{license.Id}",
             ToResponse(license, nowUtc));
@@ -281,6 +284,7 @@ public sealed class LicensesController(
             return ConflictProblem("concurrency_conflict", "The licence changed. Refresh it before retrying.");
         }
 
+        notifications.Enqueue(tenantId, [source.DeviceId, replacement.DeviceId]);
         return Ok(new LicenseTransferResponse(
             ToResponse(source, nowUtc),
             ToResponse(replacement, nowUtc),
@@ -344,6 +348,7 @@ public sealed class LicensesController(
         try
         {
             await dbContext.SaveChangesAsync(cancellationToken);
+            notifications.Enqueue(tenantId, license.DeviceId);
             return NoContent();
         }
         catch (DbUpdateConcurrencyException)

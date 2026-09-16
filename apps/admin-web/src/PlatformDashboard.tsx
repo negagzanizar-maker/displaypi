@@ -126,7 +126,7 @@ function PlatformDashboard({ session, post }: { session: Session; post: PostJson
         </tbody></table>{tenants.length === 0 && <p className="empty-state">Aucun client créé.</p>}</div>
       </section>
 
-      <section className="data-section" id="platform-step-up" aria-labelledby="platform-step-up-title">
+      {session.mfaRequired && <section className="data-section" id="platform-step-up" aria-labelledby="platform-step-up-title">
         <div className="section-heading"><div><p className="eyebrow">Action sensible</p><h2 id="platform-step-up-title">Renouveler la preuve MFA</h2></div><p>À utiliser si une action plateforme est refusée après dix minutes.</p></div>
         <form className="inline-form" onSubmit={(event: FormEvent<HTMLFormElement>) => {
           event.preventDefault()
@@ -140,7 +140,7 @@ function PlatformDashboard({ session, post }: { session: Session; post: PostJson
           <label>Code TOTP<input autoComplete="one-time-code" disabled={busy} inputMode="numeric" maxLength={6} minLength={6} name="code" pattern="[0-9]{6}" required /></label>
           <button className="primary-button" disabled={busy} type="submit">Confirmer</button>
         </form>
-      </section>
+      </section>}
     </>
   )
 }

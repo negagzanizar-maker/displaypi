@@ -7,6 +7,7 @@ using DisplayControl.Api.Devices;
 using DisplayControl.Api.Identity;
 using DisplayControl.Api.Notifications;
 using DisplayControl.Api.Operations;
+using DisplayControl.Api.Realtime;
 using DisplayControl.Api.Scheduling;
 using DisplayControl.Api.Security;
 using DisplayControl.Application.Content;
@@ -63,6 +64,14 @@ builder.WebHost.ConfigureKestrel(options =>
 });
 
 var isTesting = builder.Environment.IsEnvironment("Testing");
+var humanAuthenticationOptions = new HumanAuthenticationOptions(
+    builder.Configuration.GetValue<bool?>("Security:HumanAuthentication:RequireMfa") ?? true);
+if (!humanAuthenticationOptions.RequireMfa && !builder.Environment.IsDevelopment() && !isTesting)
+{
+    throw new InvalidOperationException(
+        "Password-only human authentication is permitted only in Development or Testing environments.");
+}
+
 var databaseConnectionString = builder.Configuration.GetConnectionString("Database");
 if (string.IsNullOrWhiteSpace(databaseConnectionString))
 {
@@ -72,7 +81,7 @@ if (string.IsNullOrWhiteSpace(databaseConnectionString))
             "ConnectionStrings:Database is required. Supply it through environment variables or a secret provider.");
     }
 
-    databaseConnectionString = "Host=127.0.0.1;Database=display_control_testing_unconnected;Username=unused;Password=unused";
+    databaseConnectionString = "Server=127.0.0.1,1433;Database=display_control_testing_unconnected;User Id=unused;Password=unused;TrustServerCertificate=True";
 }
 
 if (builder.Environment.IsProduction())
@@ -84,7 +93,17 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddMemoryCache(options => options.SizeLimit = 10_000);
 builder.Services.AddScoped<ScopedTenantContext>();
 builder.Services.AddScoped<ICurrentTenant>(services => services.GetRequiredService<ScopedTenantContext>());
-builder.Services.AddDbContext<DisplayControlDbContext>(options => options.UseNpgsql(databaseConnectionString));
+var databaseProvider = builder.Configuration["Database:Provider"] ?? "SqlServer";
+if (!string.Equals(databaseProvider, "SqlServer", StringComparison.OrdinalIgnoreCase))
+{
+    throw new InvalidOperationException("Database:Provider must be SqlServer.");
+}
+builder.Services.AddDbContext<DisplayControlDbContext>(options =>
+{
+    options.UseSqlServer(
+        databaseConnectionString,
+        sqlServer => sqlServer.MigrationsAssembly("DisplayControl.SqlServerMigrations"));
+});
 
 var dataProtection = builder.Services.AddDataProtection().SetApplicationName("DisplayControl");
 if (isTesting)
@@ -151,6 +170,7 @@ builder.Services.AddSingleton<ISecureTokenService>(secureTokenService);
 builder.Services.AddSingleton<ITenantCapabilityTokenService, TenantCapabilityTokenService>();
 builder.Services.AddSingleton<ITotpService, Rfc6238TotpService>();
 builder.Services.AddSingleton<IMfaSecretProtector, DataProtectionMfaSecretProtector>();
+builder.Services.AddSingleton(humanAuthenticationOptions);
 builder.Services.AddSingleton<ISensitivePayloadProtector, IdentityNotificationPayloadProtector>();
 builder.Services.AddSingleton(new PlatformBootstrapCredential(
     builder.Configuration["Security:PlatformBootstrapTokenSha256Base64"]));
@@ -335,19 +355,21 @@ builder.Services.AddAuthorization(options =>
         policy => policy.RequireAuthenticatedUser().RequireClaim(
             SessionClaimTypes.AuthenticationStage,
             SessionClaimTypes.MfaEnrollmentStage));
-    options.AddPolicy(
-        AuthorizationPolicies.MfaVerifiedSession,
-        policy => policy
-            .RequireAuthenticatedUser()
-            .RequireClaim(SessionClaimTypes.AuthenticationStage, SessionClaimTypes.FullStage)
-            .RequireClaim(SessionClaimTypes.AuthenticationMethod, "mfa"));
-    options.AddPolicy(
-        AuthorizationPolicies.RecentMfaSession,
-        policy => policy
-            .RequireAuthenticatedUser()
-            .RequireClaim(SessionClaimTypes.AuthenticationStage, SessionClaimTypes.FullStage)
+    var mfaVerifiedSession = new AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .RequireClaim(SessionClaimTypes.AuthenticationStage, SessionClaimTypes.FullStage);
+    var recentMfaSession = new AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .RequireClaim(SessionClaimTypes.AuthenticationStage, SessionClaimTypes.FullStage);
+    if (humanAuthenticationOptions.RequireMfa)
+    {
+        mfaVerifiedSession.RequireClaim(SessionClaimTypes.AuthenticationMethod, "mfa");
+        recentMfaSession
             .RequireClaim(SessionClaimTypes.AuthenticationMethod, "mfa")
-            .AddRequirements(new RecentMfaRequirement(RecentMfaRequirement.DefaultMaximumAge)));
+            .AddRequirements(new RecentMfaRequirement(RecentMfaRequirement.DefaultMaximumAge));
+    }
+    options.AddPolicy(AuthorizationPolicies.MfaVerifiedSession, mfaVerifiedSession.Build());
+    options.AddPolicy(AuthorizationPolicies.RecentMfaSession, recentMfaSession.Build());
     options.AddPolicy(
         AuthorizationPolicies.TenantViewer,
         policy => policy
@@ -358,44 +380,44 @@ builder.Services.AddAuthorization(options =>
                 nameof(TenantRole.ContentManager),
                 nameof(TenantRole.Viewer))
             .AddRequirements(new TenantRouteRequirement()));
-    options.AddPolicy(
-        AuthorizationPolicies.TenantContentManager,
-        policy => policy
-            .RequireClaim(SessionClaimTypes.AuthenticationStage, SessionClaimTypes.FullStage)
+    var tenantContentManager = new AuthorizationPolicyBuilder()
+        .RequireClaim(SessionClaimTypes.AuthenticationStage, SessionClaimTypes.FullStage)
+        .RequireClaim(
+            SessionClaimTypes.TenantRole,
+            nameof(TenantRole.TenantAdmin),
+            nameof(TenantRole.ContentManager))
+        .AddRequirements(new TenantRouteRequirement());
+    var tenantAdministrator = new AuthorizationPolicyBuilder()
+        .RequireClaim(SessionClaimTypes.AuthenticationStage, SessionClaimTypes.FullStage)
+        .RequireClaim(SessionClaimTypes.TenantRole, nameof(TenantRole.TenantAdmin))
+        .AddRequirements(new TenantRouteRequirement());
+    var tenantAdministratorRecentMfa = new AuthorizationPolicyBuilder()
+        .RequireClaim(SessionClaimTypes.AuthenticationStage, SessionClaimTypes.FullStage)
+        .RequireClaim(SessionClaimTypes.TenantRole, nameof(TenantRole.TenantAdmin))
+        .AddRequirements(new TenantRouteRequirement());
+    var platformAdministrator = new AuthorizationPolicyBuilder()
+        .RequireClaim(SessionClaimTypes.AuthenticationStage, SessionClaimTypes.FullStage)
+        .RequireRole("PlatformAdministrator");
+    var platformAdministratorRecentMfa = new AuthorizationPolicyBuilder()
+        .RequireClaim(SessionClaimTypes.AuthenticationStage, SessionClaimTypes.FullStage)
+        .RequireRole("PlatformAdministrator");
+    if (humanAuthenticationOptions.RequireMfa)
+    {
+        tenantContentManager.RequireClaim(SessionClaimTypes.AuthenticationMethod, "mfa");
+        tenantAdministrator.RequireClaim(SessionClaimTypes.AuthenticationMethod, "mfa");
+        tenantAdministratorRecentMfa
             .RequireClaim(SessionClaimTypes.AuthenticationMethod, "mfa")
-            .RequireClaim(
-                SessionClaimTypes.TenantRole,
-                nameof(TenantRole.TenantAdmin),
-                nameof(TenantRole.ContentManager))
-            .AddRequirements(new TenantRouteRequirement()));
-    options.AddPolicy(
-        AuthorizationPolicies.TenantAdministrator,
-        policy => policy
-            .RequireClaim(SessionClaimTypes.AuthenticationStage, SessionClaimTypes.FullStage)
-            .RequireClaim(SessionClaimTypes.TenantRole, nameof(TenantRole.TenantAdmin))
+            .AddRequirements(new RecentMfaRequirement(RecentMfaRequirement.DefaultMaximumAge));
+        platformAdministrator.RequireClaim(SessionClaimTypes.AuthenticationMethod, "mfa");
+        platformAdministratorRecentMfa
             .RequireClaim(SessionClaimTypes.AuthenticationMethod, "mfa")
-            .AddRequirements(new TenantRouteRequirement()));
-    options.AddPolicy(
-        AuthorizationPolicies.TenantAdministratorRecentMfa,
-        policy => policy
-            .RequireClaim(SessionClaimTypes.AuthenticationStage, SessionClaimTypes.FullStage)
-            .RequireClaim(SessionClaimTypes.TenantRole, nameof(TenantRole.TenantAdmin))
-            .RequireClaim(SessionClaimTypes.AuthenticationMethod, "mfa")
-            .AddRequirements(new TenantRouteRequirement())
-            .AddRequirements(new RecentMfaRequirement(RecentMfaRequirement.DefaultMaximumAge)));
-    options.AddPolicy(
-        AuthorizationPolicies.PlatformAdministrator,
-        policy => policy
-            .RequireClaim(SessionClaimTypes.AuthenticationStage, SessionClaimTypes.FullStage)
-            .RequireRole("PlatformAdministrator")
-            .RequireClaim(SessionClaimTypes.AuthenticationMethod, "mfa"));
-    options.AddPolicy(
-        AuthorizationPolicies.PlatformAdministratorRecentMfa,
-        policy => policy
-            .RequireClaim(SessionClaimTypes.AuthenticationStage, SessionClaimTypes.FullStage)
-            .RequireRole("PlatformAdministrator")
-            .RequireClaim(SessionClaimTypes.AuthenticationMethod, "mfa")
-            .AddRequirements(new RecentMfaRequirement(RecentMfaRequirement.DefaultMaximumAge)));
+            .AddRequirements(new RecentMfaRequirement(RecentMfaRequirement.DefaultMaximumAge));
+    }
+    options.AddPolicy(AuthorizationPolicies.TenantContentManager, tenantContentManager.Build());
+    options.AddPolicy(AuthorizationPolicies.TenantAdministrator, tenantAdministrator.Build());
+    options.AddPolicy(AuthorizationPolicies.TenantAdministratorRecentMfa, tenantAdministratorRecentMfa.Build());
+    options.AddPolicy(AuthorizationPolicies.PlatformAdministrator, platformAdministrator.Build());
+    options.AddPolicy(AuthorizationPolicies.PlatformAdministratorRecentMfa, platformAdministratorRecentMfa.Build());
     options.AddPolicy(
         AuthorizationPolicies.DeviceAuthenticated,
         policy => policy
@@ -410,6 +432,8 @@ builder.Services.AddSingleton<IAuthorizationHandler, RecentMfaAuthorizationHandl
 builder.Services.AddScoped<DesiredStateCompilationService>();
 builder.Services.AddScoped<DesiredStateResolver>();
 builder.Services.AddScoped<DeviceHeartbeatWorkflow>();
+builder.Services.AddSingleton<DeviceStateChangeBroker>();
+builder.Services.AddScoped<DeviceStateChangeNotifications>();
 
 builder.Services.AddRateLimiter(options =>
 {

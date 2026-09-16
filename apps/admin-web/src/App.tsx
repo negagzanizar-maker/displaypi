@@ -16,24 +16,37 @@ export type Session = {
   tenantId: string | null
   tenantRole: string | null
   mfaSatisfied: boolean
+  mfaRequired: boolean
 }
 
 type Problem = { title?: string }
 type TotpEnrollment = { secret: string; otpAuthUri: string }
 type MfaCompletion = { status: string; recoveryCodes: string[] | null }
 
-const tenantNavigation = [
-  'Vue d’ensemble',
-  'Appareils',
-  'Licences',
-  'Contenus',
-  'Playlists',
-  'Groupes & horaires',
-  'Utilisateurs',
-  'Journal d’audit',
+export type TenantView = 'dashboard' | 'devices' | 'licenses' | 'content' | 'playlists' | 'groups' | 'users' | 'audit'
+
+const tenantNavigation: Array<{ label: string; view: TenantView; adminOnly?: boolean }> = [
+  { label: 'Dashboard', view: 'dashboard' },
+  { label: 'Devices', view: 'devices' },
+  { label: 'Licenses', view: 'licenses' },
+  { label: 'Content', view: 'content' },
+  { label: 'Playlists / Publishing', view: 'playlists' },
+  { label: 'Groups', view: 'groups' },
+  { label: 'Utilisateurs', view: 'users', adminOnly: true },
+  { label: 'Journal d’audit', view: 'audit', adminOnly: true },
 ]
 
-const platformNavigation = ['Vue d’ensemble', 'Créer un client', 'Clients', 'Preuve MFA']
+const platformNavigation = [
+  { label: 'Vue d’ensemble', href: '#platform-overview' },
+  { label: 'Créer un client', href: '#platform-create' },
+  { label: 'Clients', href: '#platform-tenants' },
+  { label: 'Preuve MFA', href: '#platform-step-up', requiresMfa: true },
+]
+
+function readTenantView(): TenantView {
+  const view = window.location.hash.slice(1).split('?')[0] as TenantView
+  return ['dashboard', 'devices', 'licenses', 'content', 'playlists', 'groups', 'users', 'audit'].includes(view) ? view : 'dashboard'
+}
 
 async function readProblem(response: Response): Promise<string> {
   try {
@@ -54,6 +67,7 @@ function App() {
   const [authMode, setAuthMode] = useState<'sign-in' | 'forgot'>('sign-in')
   const [authNotice, setAuthNotice] = useState<string | null>(null)
   const [useRecovery, setUseRecovery] = useState(false)
+  const [tenantView, setTenantView] = useState<TenantView>(() => readTenantView())
 
   const loadSession = useCallback(async () => {
     const response = await fetch('/api/v1/session', {
@@ -70,6 +84,15 @@ function App() {
       error instanceof Error ? error.message : 'API indisponible.',
     ))
   }, [loadSession])
+
+  useEffect(() => {
+    const changeView = () => {
+      setTenantView(readTenantView())
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+    }
+    window.addEventListener('hashchange', changeView)
+    return () => window.removeEventListener('hashchange', changeView)
+  }, [])
 
   useEffect(() => {
     const refresh = () => { void loadSession().catch((reason: unknown) => {
@@ -168,9 +191,9 @@ function App() {
           <div>
             <p className="eyebrow">Affichage distant sécurisé</p>
             <h1 id="product-title">Pilotez vos écrans Raspberry Pi, sans mélanger vos clients.</h1>
-            <p>Les comptes sont créés uniquement sur invitation. Les sessions restent dans des cookies HttpOnly et les administrateurs utilisent un second facteur.</p>
+            <p>Les comptes sont créés uniquement sur invitation. Les sessions restent dans des cookies HttpOnly{session.mfaRequired ? ' et les administrateurs utilisent un second facteur.' : '.'}</p>
           </div>
-          <p className="trust-line">Isolation PostgreSQL RLS · contenu privé · licence à expiration</p>
+          <p className="trust-line">Isolation SQL Server RLS · contenu privé · licence à expiration</p>
         </section>
         {authMode === 'forgot'
           ? <ForgotPasswordForm busy={busy} error={actionError} onCancel={() => setAuthMode('sign-in')} onSubmit={(email) => runAction(async () => {
@@ -244,9 +267,11 @@ function App() {
         <Brand />
         <nav aria-label="Navigation principale">
           <p className="nav-label">{session.tenantId ? 'Espace client' : 'Plateforme'}</p>
-          <ul>{(session.tenantId ? tenantNavigation : platformNavigation).map((label, index) => (!session.tenantId || session.tenantRole === 'TenantAdmin' || index < 6) && <li key={label}><a href={session.tenantId ? `#section-${index}` : ['#platform-overview', '#platform-create', '#platform-tenants', '#platform-step-up'][index]}><span className="nav-dot" aria-hidden="true" />{label}</a></li>)}<li><a href="#account-security">Sécurité du compte</a></li></ul>
+           <ul>{session.tenantId
+             ? tenantNavigation.filter((item) => !item.adminOnly || session.tenantRole === 'TenantAdmin').map((item) => <li key={item.view}><a className={tenantView === item.view ? 'active' : undefined} href={`#${item.view}`}><span className="nav-dot" aria-hidden="true" />{item.label}</a></li>)
+             : platformNavigation.filter((item) => session.mfaRequired || !item.requiresMfa).map((item) => <li key={item.label}><a href={item.href}><span className="nav-dot" aria-hidden="true" />{item.label}</a></li>)}{session.mfaRequired && <li><a href="#account-security">Sécurité du compte</a></li>}</ul>
         </nav>
-        <div className="security-note"><span aria-hidden="true">●</span><div><strong>Isolation active</strong><p>Tenant imposé par la session et PostgreSQL.</p></div></div>
+        <div className="security-note"><span aria-hidden="true">●</span><div><strong>Isolation active</strong><p>Tenant imposé par la session et SQL Server.</p></div></div>
       </aside>
       <main id="main-content" className="main-content">
         <header className="topbar">
@@ -258,14 +283,14 @@ function App() {
           })} type="button">Se déconnecter</button>
         </header>
         {actionError && <p className="form-error" role="alert">{actionError}</p>}
-        <section className="welcome" aria-labelledby="welcome-title">
+        {(!session.tenantId || tenantView === 'dashboard') && <section className="welcome" aria-labelledby="welcome-title">
           <div><p className="eyebrow">Session vérifiée</p><h2 id="welcome-title">Bonjour {session.displayName ?? session.email ?? 'administrateur'}.</h2><p>Les données ci-dessous proviennent directement de l’API du tenant lié à votre session.</p></div>
-          <div className="signal" aria-label="État de sécurité : session active"><span aria-hidden="true" />{session.mfaSatisfied ? 'MFA vérifiée' : 'Session active'}</div>
-        </section>
+          <div className="signal" aria-label="État de sécurité : session active"><span aria-hidden="true" />{session.mfaRequired && session.mfaSatisfied ? 'MFA vérifiée' : 'Session active'}</div>
+        </section>}
         {session.tenantId
-          ? <OperationsDashboard session={session} post={post} />
+           ? <OperationsDashboard session={session} post={post} view={tenantView} />
           : <PlatformDashboard session={session} post={post} />}
-        <AccountSecurity post={post} onCodes={setRecoveryCodes} />
+        {session.mfaRequired && <AccountSecurity post={post} onCodes={setRecoveryCodes} />}
       </main>
     </div>
   )
@@ -281,7 +306,7 @@ function SignInForm({ busy, error, notice, onForgot, onSubmit }: { busy: boolean
     const values = new FormData(event.currentTarget)
     void onSubmit(String(values.get('email') ?? ''), String(values.get('password') ?? ''))
   }
-  return <section className="auth-panel"><form id="sign-in-form" className="auth-card" onSubmit={submit}><p className="eyebrow">Accès privé</p><h2>Se connecter</h2><p>Utilisez l’adresse associée à votre invitation.</p>{notice && <p className="form-notice" role="status">{notice}</p>}<label>Adresse e-mail<input autoComplete="username" disabled={busy} maxLength={320} name="email" required type="email" /></label><label>Mot de passe<input autoComplete="current-password" disabled={busy} maxLength={1024} name="password" required type="password" /></label>{error && <p className="form-error" role="alert">{error}</p>}<button className="primary-button" disabled={busy} type="submit">{busy ? 'Vérification…' : 'Se connecter'}</button><button className="text-button" disabled={busy} onClick={onForgot} type="button">Mot de passe oublié</button></form></section>
+  return <section className="auth-panel"><form id="sign-in-form" className="auth-card" onSubmit={submit}><p className="eyebrow">Accès privé</p><h2>Se connecter</h2><p>Utilisez l’adresse associée à votre invitation.</p>{notice && <p className="form-notice" role="status">{notice}</p>}<label>Adresse e-mail<input autoComplete="username" disabled={busy} maxLength={320} name="email" required type="email" /></label><label>Mot de passe<input autoComplete="current-password" disabled={busy} maxLength={1024} name="password" required type="password" /></label>{error && <p className="form-error" role="alert">{error}</p>}<button className="text-button forgot-password-button" disabled={busy} onClick={onForgot} type="button">Mot de passe oublié ?</button><button className="primary-button" disabled={busy} type="submit">{busy ? 'Vérification…' : 'Se connecter'}</button></form></section>
 }
 
 function ForgotPasswordForm({ busy, error, onCancel, onSubmit }: { busy: boolean; error: string | null; onCancel: () => void; onSubmit: (email: string) => Promise<void> }) {

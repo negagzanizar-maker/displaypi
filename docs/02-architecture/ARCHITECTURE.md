@@ -9,7 +9,7 @@ The architecture is optimized for four properties:
 3. offline playback that fails closed at a bounded authorization expiry; and
 4. a minimal deployable shape that an internship project can implement, test, explain, and operate completely.
 
-The approved baseline is a **modular monolith**, one PostgreSQL database, private object storage, and a separately deployed Pi agent/player. Modules communicate in-process through explicit application interfaces; they do not share mutable domain state casually.
+The approved baseline is a **modular monolith**, one SQL Server 2022 database, private object storage, and a separately deployed Pi agent/player. Modules communicate in-process through explicit application interfaces; they do not share mutable domain state casually.
 
 ## 2. System context
 
@@ -42,7 +42,7 @@ flowchart TB
         ADMIN[React administration SPA]
         API[ASP.NET Core modular monolith]
         JOBS[Restricted background workers]
-        DB[(PostgreSQL)]
+        DB[(SQL Server 2022)]
         OBJ[(Private media storage)]
         AV[Isolated malware scanner]
 
@@ -106,7 +106,7 @@ sequenceDiagram
     participant W as React admin
     participant A as ASP.NET Core API
     participant Z as Authorization policies
-    participant D as PostgreSQL + RLS
+    participant D as SQL Server + RLS
 
     U->>W: Perform tenant action
     W->>A: HTTPS request + session cookie + CSRF token
@@ -207,7 +207,7 @@ Downloads use a staging directory. The agent verifies expected byte length and S
 |---|---|---|
 | Internet to admin host | Reverse proxy/API | Browser requests and uploaded media |
 | Internet to device host | mTLS device API | Enrollment attempts and device-reported inventory |
-| API to PostgreSQL | Parameterized EF/data layer with tenant context | Domain/query parameters |
+| API to SQL Server | Parameterized EF/data layer with tenant `SESSION_CONTEXT` | Domain/query parameters |
 | API/worker to object storage | Private service identity | Uploaded bytes and metadata |
 | Worker to media scanner/parser | Isolated bounded process | Potentially malicious files |
 | Agent to local player | Agent authorization gate | Browser/player state |
@@ -233,6 +233,6 @@ Downloads use a staging directory. The agent verifies expected byte length and S
 
 - .NET 10 LTS target with current supported patches.
 - React 19.2 stable line and Vite 8 stable line, exact versions pinned at scaffold time.
-- PostgreSQL 18 runtime; tests run against the same major version.
+- SQL Server 2022 runtime; integration tests run against the same major version.
 - Raspberry Pi publishes target `linux-arm64` and must be exercised on actual Pi 4/5 hardware.
 - No framework or infrastructure component may silently become a security authority outside these boundaries.

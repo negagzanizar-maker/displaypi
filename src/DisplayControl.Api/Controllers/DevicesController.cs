@@ -3,7 +3,9 @@ using System.Security.Claims;
 using System.Text.Json;
 using DisplayControl.Api.Pagination;
 using DisplayControl.Api.Security;
+using DisplayControl.Application.Content;
 using DisplayControl.Application.Security;
+using DisplayControl.Domain.Content;
 using DisplayControl.Domain.Devices;
 using DisplayControl.Domain.Licensing;
 using DisplayControl.Domain.Operations;
@@ -41,10 +43,10 @@ public sealed class DevicesController(
         var deviceIds = devices.Select(value => value.Id).ToArray();
         var licenses = await dbContext.Licenses.AsNoTracking()
             .Where(value => deviceIds.Contains(value.DeviceId))
-            .OrderByDescending(value => value.ExpiresAtUtc)
             .ToListAsync(cancellationToken);
+        var nowUtc = timeProvider.GetUtcNow();
         var latestLicenses = licenses.GroupBy(value => value.DeviceId)
-            .ToDictionary(group => group.Key, group => group.First());
+            .ToDictionary(group => group.Key, group => SelectLicenseForDisplay(group, nowUtc)!);
         var networkInterfaces = await dbContext.DeviceNetworkInterfaces.AsNoTracking()
             .Where(value => deviceIds.Contains(value.DeviceId))
             .OrderBy(value => value.DeviceId)
@@ -55,8 +57,62 @@ public sealed class DevicesController(
             .ToDictionary(
                 group => group.Key,
                 group => (IReadOnlyList<DeviceNetworkResponse>)group.Select(ToNetworkResponse).ToArray());
-        var nowUtc = timeProvider.GetUtcNow();
-
+        var latestHeartbeatTimes = dbContext.DeviceHeartbeats.AsNoTracking()
+            .Where(value => deviceIds.Contains(value.DeviceId))
+            .GroupBy(value => value.DeviceId)
+            .Select(group => new { DeviceId = group.Key, ReceivedAtUtc = group.Max(value => value.ReceivedAtUtc) });
+        var latestHeartbeatRows = await (
+            from heartbeat in dbContext.DeviceHeartbeats.AsNoTracking()
+            join latest in latestHeartbeatTimes
+                on new { heartbeat.DeviceId, heartbeat.ReceivedAtUtc }
+                equals new { latest.DeviceId, latest.ReceivedAtUtc }
+            select new LatestPlaybackHeartbeat(
+                heartbeat.DeviceId,
+                heartbeat.Sequence,
+                heartbeat.ReceivedAtUtc,
+                heartbeat.AppliedDesiredStateVersion,
+                heartbeat.PlayerStateCode,
+                heartbeat.LastErrorCode,
+                heartbeat.FreeDiskBytes,
+                heartbeat.ServerObservedIp,
+                heartbeat.InventoryJson))
+            .ToListAsync(cancellationToken);
+        var latestHeartbeats = latestHeartbeatRows
+            .GroupBy(value => value.DeviceId)
+            .ToDictionary(group => group.Key, group => group.OrderByDescending(value => value.Sequence).First());
+        var currentContentVersionIds = latestHeartbeats.Values
+            .Select(value => ReadCurrentContentVersionId(value.InventoryJson))
+            .Where(value => value.HasValue)
+            .Select(value => value!.Value)
+            .Distinct()
+            .ToArray();
+        var currentContentRows = await (
+            from version in dbContext.ContentVersions.AsNoTracking()
+            join content in dbContext.ContentAssets.AsNoTracking()
+                on version.ContentAssetId equals content.Id
+            where currentContentVersionIds.Contains(version.Id)
+            select new CurrentContentDetails(
+                version.Id,
+                content.Id,
+                content.Title,
+                content.MediaKind))
+            .ToDictionaryAsync(value => value.ContentVersionId, cancellationToken);
+        var playbackRows = await (
+            from desiredState in dbContext.DesiredStates.AsNoTracking()
+            join asset in dbContext.DesiredStateAssets.AsNoTracking()
+                on desiredState.Id equals asset.DesiredStateId
+            where deviceIds.Contains(desiredState.DeviceId) && currentContentVersionIds.Contains(asset.ContentVersionId)
+            select new CurrentPlaybackDetails(
+                desiredState.DeviceId,
+                desiredState.Version,
+                asset.ContentVersionId,
+                asset.PlaybackJson))
+            .ToListAsync(cancellationToken);
+        var currentPlaybackRows = playbackRows
+            .Where(value => latestHeartbeats.TryGetValue(value.DeviceId, out var heartbeat) &&
+                heartbeat.AppliedDesiredStateVersion == value.DesiredStateVersion)
+            .GroupBy(value => value.DeviceId)
+            .ToDictionary(group => group.Key, group => group.First());
         return Ok(devices.Select(device => new DeviceSummaryResponse(
             device.Id,
             device.DisplayName,
@@ -65,10 +121,18 @@ public sealed class DevicesController(
             device.LastSeenUtc,
             device.SerialNumberNormalized,
             device.Hostname,
+            device.OsDescription,
+            device.Architecture,
+            device.AgentVersion,
+            device.PlayerVersion,
+            device.DiskCapacityBytes,
+            latestHeartbeats.TryGetValue(device.Id, out var latestInventory) ? latestInventory.FreeDiskBytes : null,
+            latestInventory?.ServerObservedIp,
             latestLicenses.TryGetValue(device.Id, out var license) ? license.EvaluateAt(nowUtc) : null,
             license?.ExpiresAtUtc,
             device.AppliedManifestVersion,
             device.PlaybackHealthCode,
+            BuildPlayback(device.Id, latestHeartbeats, currentContentRows, currentPlaybackRows),
             networksByDevice.GetValueOrDefault(device.Id, []),
             device.ConcurrencyToken)).ToArray());
     }
@@ -93,11 +157,11 @@ public sealed class DevicesController(
             .OrderBy(value => value.InterfaceName)
             .ToListAsync(cancellationToken);
         var networks = networkEntities.Select(ToNetworkResponse).ToArray();
-        var license = await dbContext.Licenses.AsNoTracking()
+        var licenses = await dbContext.Licenses.AsNoTracking()
             .Where(value => value.DeviceId == deviceId)
-            .OrderByDescending(value => value.ExpiresAtUtc)
-            .FirstOrDefaultAsync(cancellationToken);
+            .ToListAsync(cancellationToken);
         var nowUtc = timeProvider.GetUtcNow();
+        var license = SelectLicenseForDisplay(licenses, nowUtc);
 
         return Ok(new DeviceDetailResponse(
             device.Id,
@@ -328,6 +392,47 @@ public sealed class DevicesController(
         JsonSerializer.Deserialize<string[]>(value.LocalAddressesJson) ?? [],
         value.ObservedAtUtc);
 
+    private static DevicePlaybackResponse? BuildPlayback(
+        Guid deviceId,
+        IReadOnlyDictionary<Guid, LatestPlaybackHeartbeat> latestHeartbeats,
+        IReadOnlyDictionary<Guid, CurrentContentDetails> currentContentRows,
+        IReadOnlyDictionary<Guid, CurrentPlaybackDetails> currentPlaybackRows)
+    {
+        if (!latestHeartbeats.TryGetValue(deviceId, out var heartbeat)) return null;
+        var contentVersionId = ReadCurrentContentVersionId(heartbeat.InventoryJson);
+        currentContentRows.TryGetValue(contentVersionId ?? Guid.Empty, out var content);
+        currentPlaybackRows.TryGetValue(deviceId, out var playback);
+        PlaylistItemPresentation.TryRead(playback?.PlaybackJson ?? "{}", out _, out var captionText);
+        return new DevicePlaybackResponse(
+            heartbeat.PlayerStateCode,
+            contentVersionId,
+            content?.ContentId,
+            content?.Title,
+            content?.MediaKind,
+            heartbeat.AppliedDesiredStateVersion,
+            heartbeat.ReceivedAtUtc,
+            heartbeat.LastErrorCode,
+            captionText);
+    }
+
+    private static Guid? ReadCurrentContentVersionId(string inventoryJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(inventoryJson);
+            return document.RootElement.TryGetProperty("CurrentContentVersionId", out var value) ||
+                document.RootElement.TryGetProperty("currentContentVersionId", out value)
+                ? value.ValueKind == JsonValueKind.String && Guid.TryParse(value.GetString(), out var id) && id != Guid.Empty
+                    ? id
+                    : null
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     private static string CalculateHealth(DateTimeOffset? lastSeenUtc, DateTimeOffset nowUtc) => lastSeenUtc switch
     {
         null => "offline",
@@ -335,6 +440,15 @@ public sealed class DevicesController(
         _ when nowUtc - lastSeenUtc <= TimeSpan.FromMinutes(10) => "degraded",
         _ => "offline"
     };
+
+    private static DeviceLicense? SelectLicenseForDisplay(
+        IEnumerable<DeviceLicense> licenses,
+        DateTimeOffset nowUtc) => licenses
+            .OrderByDescending(value => value.EvaluateAt(nowUtc) == LicenseEffectiveState.Active)
+            .ThenByDescending(value => value.UpdatedAtUtc)
+            .ThenByDescending(value => value.CreatedAtUtc)
+            .ThenByDescending(value => value.ExpiresAtUtc)
+            .FirstOrDefault();
 
     private static ObjectResult ConcurrencyConflict() => ConflictProblem(
         "concurrency_conflict",
@@ -350,6 +464,29 @@ public sealed class DevicesController(
     {
         StatusCode = StatusCodes.Status409Conflict
     };
+
+    private sealed record LatestPlaybackHeartbeat(
+        Guid DeviceId,
+        long Sequence,
+        DateTimeOffset ReceivedAtUtc,
+        long? AppliedDesiredStateVersion,
+        string PlayerStateCode,
+        string? LastErrorCode,
+        long? FreeDiskBytes,
+        string? ServerObservedIp,
+        string InventoryJson);
+
+    private sealed record CurrentContentDetails(
+        Guid ContentVersionId,
+        Guid ContentId,
+        string Title,
+        MediaKind MediaKind);
+
+    private sealed record CurrentPlaybackDetails(
+        Guid DeviceId,
+        long DesiredStateVersion,
+        Guid ContentVersionId,
+        string PlaybackJson);
 }
 
 internal static class HttpContextAuditExtensions
@@ -394,12 +531,31 @@ public sealed record DeviceSummaryResponse(
     DateTimeOffset? LastSeenUtc,
     string? SerialNumber,
     string? Hostname,
+    string? OsDescription,
+    string? Architecture,
+    string? AgentVersion,
+    string? PlayerVersion,
+    long? DiskCapacityBytes,
+    long? FreeDiskBytes,
+    string? ServerObservedIp,
     LicenseEffectiveState? LicenseState,
     DateTimeOffset? LicenseExpiresAtUtc,
     long? AppliedManifestVersion,
     string? PlaybackHealthCode,
+    DevicePlaybackResponse? Playback,
     IReadOnlyList<DeviceNetworkResponse> NetworkInterfaces,
     Guid ConcurrencyToken);
+
+public sealed record DevicePlaybackResponse(
+    string PlayerState,
+    Guid? ContentVersionId,
+    Guid? ContentId,
+    string? Title,
+    MediaKind? MediaKind,
+    long? DesiredStateVersion,
+    DateTimeOffset ReportedAtUtc,
+    string? ErrorCode,
+    string? CaptionText);
 
 public sealed record DeviceDetailResponse(
     Guid Id,

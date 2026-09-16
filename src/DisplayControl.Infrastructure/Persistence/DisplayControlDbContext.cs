@@ -41,7 +41,7 @@ public sealed partial class DisplayControlDbContext(
         try
         {
             await Database.ExecuteSqlRawAsync(
-                "SELECT set_config('app.tenant_id', {0}, true)",
+                "EXEC sys.sp_set_session_context @key=N'tenant_id', @value={0}, @read_only=0",
                 [tenantId.ToString()],
                 cancellationToken);
             return transaction;
@@ -61,7 +61,7 @@ public sealed partial class DisplayControlDbContext(
         try
         {
             await Database.ExecuteSqlRawAsync(
-                "SELECT set_config('app.platform_catalog', 'true', true)",
+                "EXEC sys.sp_set_session_context @key=N'platform_catalog', @value=1, @read_only=0",
                 cancellationToken);
             return transaction;
         }
@@ -175,7 +175,7 @@ public sealed partial class DisplayControlDbContext(
         entity.Property(value => value.Outcome).HasColumnName("outcome").HasMaxLength(32).IsRequired();
         entity.Property(value => value.ReasonCode).HasColumnName("reason_code").HasMaxLength(64);
         entity.Property(value => value.CorrelationId).HasColumnName("correlation_id").IsRequired();
-        entity.Property(value => value.DetailsJson).HasColumnName("details_json").HasColumnType("jsonb").IsRequired();
+        entity.Property(value => value.DetailsJson).HasColumnName("details_json").HasColumnType("nvarchar(max)").IsRequired();
         entity.Property(value => value.OccurredAtUtc).HasColumnName("occurred_at_utc").IsRequired();
         entity.HasIndex(value => new { value.TenantId, value.OccurredAtUtc }).HasDatabaseName("ix_audit_events_tenant_occurred");
         entity.HasQueryFilter(value => CurrentTenantId.HasValue && value.TenantId == CurrentTenantId.Value);
@@ -187,7 +187,7 @@ public sealed partial class DisplayControlDbContext(
         entity.ToTable("outbox_messages");
         ConfigureTenantOwned(entity, "outbox_messages");
         entity.Property(value => value.MessageType).HasColumnName("message_type").HasMaxLength(160).IsRequired();
-        entity.Property(value => value.PayloadJson).HasColumnName("payload_json").HasColumnType("jsonb").IsRequired();
+        entity.Property(value => value.PayloadJson).HasColumnName("payload_json").HasColumnType("nvarchar(max)").IsRequired();
         entity.Property(value => value.OccurredAtUtc).HasColumnName("occurred_at_utc").IsRequired();
         entity.Property(value => value.ProcessedAtUtc).HasColumnName("processed_at_utc");
         entity.Property(value => value.AttemptCount).HasColumnName("attempt_count").IsRequired();

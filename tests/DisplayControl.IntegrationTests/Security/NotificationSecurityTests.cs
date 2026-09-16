@@ -33,7 +33,7 @@ public sealed class NotificationSecurityTests
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["ConnectionStrings:MaintenanceDatabase"] =
-                "Host=localhost;Database=test;Username=display_control_maintenance;Password=test"
+                "Server=localhost;Database=test;User Id=display_control_maintenance;Password=test;TrustServerCertificate=True"
         }).Build();
 
         var options = OperationalDataRetentionOptions.FromConfiguration(configuration);
@@ -44,7 +44,7 @@ public sealed class NotificationSecurityTests
         var wrongRole = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["ConnectionStrings:MaintenanceDatabase"] =
-                "Host=localhost;Database=test;Username=display_control_runtime;Password=test"
+                "Server=localhost;Database=test;User Id=display_control_runtime;Password=test;TrustServerCertificate=True"
         }).Build();
         Assert.Throws<InvalidOperationException>(() =>
             OperationalDataRetentionOptions.FromConfiguration(wrongRole));
@@ -158,7 +158,7 @@ public sealed class NotificationSecurityTests
     {
         var settings = new Dictionary<string, string?>
         {
-            ["ConnectionStrings:NotificationDatabase"] = "Host=localhost;Database=test;Username=test;Password=test",
+            ["ConnectionStrings:NotificationDatabase"] = "Server=localhost;Database=test;User Id=test;Password=test;TrustServerCertificate=True",
             ["Notifications:PublicBaseUrl"] = "https://display.example.test",
             ["Notifications:Smtp:Host"] = "smtp.example.test",
             ["Notifications:Smtp:FromAddress"] = "display@example.test"

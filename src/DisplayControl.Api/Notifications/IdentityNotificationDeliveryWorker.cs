@@ -3,8 +3,7 @@ using System.Net;
 using System.Net.Mail;
 
 using DisplayControl.Application.Security;
-using Npgsql;
-using NpgsqlTypes;
+using Microsoft.Data.SqlClient;
 
 namespace DisplayControl.Api.Notifications;
 
@@ -51,11 +50,11 @@ public sealed class IdentityNotificationDeliveryWorker(
 
     private async Task<bool> DeliverNextAsync(CancellationToken cancellationToken)
     {
-        await using var connection = new NpgsqlConnection(options.DatabaseConnectionString);
+        await using var connection = new SqlConnection(options.DatabaseConnectionString);
         await connection.OpenAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
-        await using (var contextCommand = new NpgsqlCommand(
-            "SELECT set_config('app.notification_delivery', 'true', true)",
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        await using (var contextCommand = new SqlCommand(
+            "EXEC sys.sp_set_session_context @key=N'notification_delivery', @value=1, @read_only=0",
             connection,
             transaction))
         {
@@ -64,17 +63,16 @@ public sealed class IdentityNotificationDeliveryWorker(
 
         const string selectSql =
             """
-            SELECT id, notification_type, normalized_recipient_email, protection_scheme, protected_payload, attempt_count
-            FROM app.identity_notifications
+            SELECT TOP (1) id, notification_type, normalized_recipient_email, protection_scheme, protected_payload, attempt_count
+            FROM app.identity_notifications WITH (UPDLOCK, READPAST, ROWLOCK)
             WHERE processed_at_utc IS NULL
               AND failed_at_utc IS NULL
               AND next_attempt_at_utc <= @now
             ORDER BY created_at_utc, id
-            FOR UPDATE SKIP LOCKED
-            LIMIT 1
+
             """;
         NotificationRow? row = null;
-        await using (var select = new NpgsqlCommand(selectSql, connection, transaction))
+        await using (var select = new SqlCommand(selectSql, connection, transaction))
         {
             select.Parameters.AddWithValue("now", timeProvider.GetUtcNow());
             await using var reader = await select.ExecuteReaderAsync(cancellationToken);
@@ -170,9 +168,9 @@ public sealed class IdentityNotificationDeliveryWorker(
                 concurrency_token = @concurrency_token
             WHERE id = @id
             """;
-        await using (var update = new NpgsqlCommand(updateSql, connection, transaction))
+        await using (var update = new SqlCommand(updateSql, connection, transaction))
         {
-            update.Parameters.Add("safe_error_code", NpgsqlDbType.Varchar).Value =
+            update.Parameters.Add("safe_error_code", System.Data.SqlDbType.VarChar).Value =
                 (object?)safeErrorCode ?? DBNull.Value;
             update.Parameters.AddWithValue("now", nowUtc);
             update.Parameters.AddWithValue("next_attempt", decision.NextAttemptAtUtc);

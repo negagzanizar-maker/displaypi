@@ -17,6 +17,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+Add-Type -AssemblyName System.Net.Http
+
 if ($null -eq $Password) {
     $Password = Read-Host 'Initial platform administrator password' -AsSecureString
 }
@@ -82,4 +84,9 @@ finally {
     $handler.Dispose()
 }
 
-Write-Host 'Platform administrator created. The account must enroll TOTP at first sign-in.'
+if ($session.mfaRequired) {
+    Write-Host 'Platform administrator created. The account must enroll TOTP at first sign-in.'
+}
+else {
+    Write-Host 'Platform administrator created. MFA is disabled for this Development field-test profile.'
+}

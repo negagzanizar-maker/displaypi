@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: sudo ./install.sh --artifact FILE --sha256 HEX --version VERSION --server HTTPS_URL --enrollment-code-file FILE [--server-ca FILE] [--kiosk-user USER]" >&2
+  echo "Usage: sudo ./install.sh --artifact FILE --sha256 HEX --version VERSION --server HTTPS_URL [--enrollment-code-file FILE] [--server-ca FILE] [--kiosk-user USER]" >&2
 }
 
 artifact=""
@@ -30,7 +30,8 @@ if [[ ${EUID} -ne 0 ]]; then
   exit 1
 fi
 
-if [[ ! -f "${artifact}" || ! -f "${enrollment_source}" ||
+if [[ ! -f "${artifact}" ||
+      ( -n "${enrollment_source}" && ! -f "${enrollment_source}" ) ||
       ! "${expected_sha256}" =~ ^[0-9a-fA-F]{64}$ ||
       ! "${release_version}" =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$ ||
       ! "${server_url}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/?$ ||
@@ -40,7 +41,9 @@ if [[ ! -f "${artifact}" || ! -f "${enrollment_source}" ||
 fi
 
 artifact="$(readlink -f -- "${artifact}")"
-enrollment_source="$(readlink -f -- "${enrollment_source}")"
+if [[ -n "${enrollment_source}" ]]; then
+  enrollment_source="$(readlink -f -- "${enrollment_source}")"
+fi
 for required_command in curl openssl sha256sum tar update-ca-certificates; do
   if ! command -v "${required_command}" >/dev/null 2>&1; then
     echo "Required command is not installed: ${required_command}" >&2
@@ -85,6 +88,15 @@ install -d -o root -g root -m 0755 /opt/display-control/releases /etc/display-co
 install -d -o display-control-agent -g display-control-agent -m 0700 /var/lib/display-control
 install -d -o "${kiosk_user}" -g "${kiosk_group}" -m 0700 /var/lib/display-control-kiosk
 
+if [[ -z "${enrollment_source}" &&
+      ( ! -f /var/lib/display-control/agent-state.json ||
+        ! -f /var/lib/display-control/device-private-key.pem ||
+        -L /var/lib/display-control/agent-state.json ||
+        -L /var/lib/display-control/device-private-key.pem ) ]]; then
+  echo "An enrollment code file is required for a device without existing protected enrollment state." >&2
+  exit 2
+fi
+
 if [[ -n "${server_ca}" ]]; then
   install -o root -g root -m 0644 "${server_ca}" /usr/local/share/ca-certificates/display-control-field-test.crt
   update-ca-certificates >/dev/null
@@ -120,16 +132,25 @@ mv -- "${staging_directory}" "${release_directory}"
 if [[ -f /etc/display-control/agent.env ]]; then
   cp --preserve=mode,ownership /etc/display-control/agent.env "${previous_environment}"
 fi
-install -o display-control-agent -g display-control-agent -m 0600 "${enrollment_source}" /var/lib/display-control/enrollment-code
+if [[ -n "${enrollment_source}" ]]; then
+  install -o display-control-agent -g display-control-agent -m 0600 "${enrollment_source}" /var/lib/display-control/enrollment-code
+fi
 
-cat > /etc/display-control/agent.env <<EOF
+{
+cat <<EOF
 Agent__ServerBaseAddress=${server_url}
 Agent__StateDirectory=/var/lib/display-control
-Agent__EnrollmentCodeFile=/var/lib/display-control/enrollment-code
 Agent__HeartbeatIntervalSeconds=30
 Agent__MaximumCacheBytes=4294967296
 Agent__MinimumFreeDiskBytes=268435456
 EOF
+if [[ -n "${enrollment_source}" ]]; then
+  echo "Agent__EnrollmentCodeFile=/var/lib/display-control/enrollment-code"
+fi
+if [[ -n "${server_ca}" ]]; then
+  echo "Agent__CheckServerCertificateRevocation=false"
+fi
+} > /etc/display-control/agent.env
 chown root:display-control-agent /etc/display-control/agent.env
 chmod 0640 /etc/display-control/agent.env
 
@@ -179,4 +200,8 @@ if [[ "${activation_succeeded}" != true ]]; then
 fi
 systemctl restart display-control-kiosk.service
 
-echo "Display Control ${release_version} installed. The enrollment secret will be deleted after successful enrollment."
+if [[ -n "${enrollment_source}" ]]; then
+  echo "Display Control ${release_version} installed. The enrollment secret will be deleted after successful enrollment."
+else
+  echo "Display Control ${release_version} updated using the existing protected device identity."
+fi
